@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Venice Key Manager | Control Plane</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+  <!-- Toast Notification Container -->
+  <div id="toast-container"></div>
+
+  <!-- Global Header -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="logo-box">
+        <span class="logo-icon">⚡</span>
+        <div class="logo-text">
+          <span class="logo-title">VENICE.AI</span>
+          <span class="logo-subtitle">KEY MANAGER & MCP</span>
+        </div>
+      </div>
+      <div class="status-indicator-box">
+        <span id="system-status-dot" class="status-dot"></span>
+        <span id="system-status-text">Connecting...</span>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <button class="btn btn-secondary btn-sm" id="btn-open-settings">
+        ⚙️ Settings & Thresholds
+      </button>
+      <button class="btn btn-secondary btn-sm" id="btn-backup-menu">
+        💾 State Backup
+      </button>
+      <button class="btn btn-primary btn-sm" id="btn-open-create-modal">
+        ➕ Mint New Key
+      </button>
+    </div>
+  </header>
+
+  <!-- Low Balance Alert Banner -->
+  <div id="low-balance-banner" class="alert-banner hidden">
+    <div class="banner-content">
+      <span class="banner-icon">⚠️</span>
+      <span id="banner-text"><strong>Low USD Inference Balance Warning:</strong> Your account balance is below the warning threshold ($0.20).</span>
+    </div>
+    <div class="banner-actions">
+      <a href="https://venice.ai/settings/api" target="_blank" rel="noopener" class="btn btn-xs btn-outline">Top Up on Venice</a>
+      <button class="btn-close-banner" id="btn-close-banner">✕</button>
+    </div>
+  </div>
+
+  <main class="app-container">
+    <!-- Real-Time Metric KPI Cards -->
+    <section class="kpi-grid">
+      <div class="kpi-card" id="kpi-balance">
+        <div class="kpi-label">Account Balance</div>
+        <div class="kpi-value-row">
+          <span class="kpi-value" id="val-balance-usd">$0.00</span>
+          <span class="kpi-badge" id="badge-api-tier">PAID</span>
+        </div>
+        <div class="kpi-subtext" id="val-balance-diem">0.00 DIEM</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-label">Active API Keys</div>
+        <div class="kpi-value-row">
+          <span class="kpi-value" id="val-keys-count">0</span>
+          <span class="kpi-subbadge" id="val-low-keys-count">0 low balance</span>
+        </div>
+        <div class="kpi-subtext">Across all categories</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-label">Current Period Spend</div>
+        <div class="kpi-value-row">
+          <span class="kpi-value" id="val-period-spend">$0.0000</span>
+        </div>
+        <div class="kpi-subtext">Sum of active key period usages</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-label">Next Daily Epoch Reset</div>
+        <div class="kpi-value-row">
+          <span class="kpi-value mono" id="val-epoch-countdown">--:--:--</span>
+        </div>
+        <div class="kpi-subtext" id="val-epoch-utc">Resets 00:00 UTC</div>
+      </div>
+    </section>
+
+    <!-- Main Navigation Tabs -->
+    <nav class="nav-tabs-bar">
+      <div class="tabs-left">
+        <button class="nav-tab active" data-tab="tab-keys">🔑 API Keys (<span id="tab-keys-count">0</span>)</button>
+        <button class="nav-tab" data-tab="tab-models">🧠 Models & Privacy (<span id="tab-models-count">0</span>)</button>
+        <button class="nav-tab" data-tab="tab-playground">⚡ Light Inference Playground</button>
+        <button class="nav-tab" data-tab="tab-mcp">🔌 MCP Tools & Server</button>
+      </div>
+      <div class="tabs-right">
+        <button class="btn btn-icon btn-sm" id="btn-refresh" title="Refresh Data">🔄 Refresh</button>
+      </div>
+    </nav>
+
+    <!-- TAB 1: API KEYS MANAGEMENT -->
+    <section id="tab-keys" class="tab-pane active">
+      <!-- Filter & Search Controls -->
+      <div class="table-toolbar">
+        <div class="toolbar-left">
+          <!-- Categories Filter Pills -->
+          <div class="category-pills" id="category-pills-container">
+            <button class="pill active" data-cat="all">All Keys</button>
+            <!-- Injected dynamic category pills -->
+          </div>
+          <button class="btn btn-xs btn-outline" id="btn-add-category" title="New Category">➕ Category</button>
+        </div>
+
+        <div class="toolbar-right">
+          <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="key-search-input" placeholder="Search by name, ID, or last 6..." />
+          </div>
+          <label class="toggle-control">
+            <input type="checkbox" id="toggle-low-balance-only">
+            <span class="toggle-label">⚠️ Low balance only</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Keys Table -->
+      <div class="table-card">
+        <div class="table-responsive">
+          <table class="data-table" id="keys-table">
+            <thead>
+              <tr>
+                <th>Description / Name</th>
+                <th>Category</th>
+                <th>Type</th>
+                <th>Key Identifier</th>
+                <th>Period Limit (USD)</th>
+                <th>Period Spend</th>
+                <th>Remaining</th>
+                <th>7-Day Trailing</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="keys-tbody">
+              <tr>
+                <td colspan="9" class="text-center py-8 text-muted">Loading keys from Venice.ai...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: MODELS & PRIVACY CATALOG -->
+    <section id="tab-models" class="tab-pane">
+      <div class="table-toolbar">
+        <div class="toolbar-left">
+          <div class="category-pills" id="model-privacy-pills">
+            <button class="pill active" data-privacy="all">All Models</button>
+            <button class="pill" data-privacy="e2ee">🔒 Hardware Enclaves (E2EE)</button>
+            <button class="pill" data-privacy="private">🛡️ Zero Data Retention (ZDR)</button>
+            <button class="pill" data-privacy="anonymized">🌐 Anonymized</button>
+          </div>
+        </div>
+        <div class="toolbar-right">
+          <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="model-search-input" placeholder="Search models..." />
+          </div>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <div class="table-responsive">
+          <table class="data-table" id="models-table">
+            <thead>
+              <tr>
+                <th>Model Name & ID</th>
+                <th>Privacy Level</th>
+                <th>Context Length</th>
+                <th>Input $/1M</th>
+                <th>Output $/1M</th>
+                <th>Capabilities</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="models-tbody">
+              <tr><td colspan="7" class="text-center py-8 text-muted">Loading models...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: INFERENCE PLAYGROUND -->
+    <section id="tab-playground" class="tab-pane">
+      <div class="playground-layout">
+        <div class="playground-card">
+          <h3 class="card-title">⚡ Fast Light Inference Test</h3>
+          <p class="card-subtitle">Run light prompt completions against any model to benchmark latency, verify key validity, and calculate token spend.</p>
+
+          <div class="form-group">
+            <label class="form-label">Model</label>
+            <select id="play-model-select" class="form-control">
+              <option value="deepseek-v4-flash">deepseek-v4-flash (Fast & Affordable)</option>
+              <option value="e2ee-deepseek-v4-flash">e2ee-deepseek-v4-flash (E2EE Hardware Enclave)</option>
+              <option value="kimi-k3">kimi-k3 (Flagship Frontier)</option>
+              <option value="e2ee-kimi-k3-p">e2ee-kimi-k3-p (E2EE Frontier)</option>
+              <option value="qwen-2-5-7b-instruct">qwen-2-5-7b-instruct (Ultra-budget)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Select Key (Optional, default Master Key)</label>
+            <select id="play-key-select" class="form-control">
+              <option value="">Master Key (Server Configured)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Prompt</label>
+            <textarea id="play-prompt-input" class="form-control mono" rows="4">Respond with 'Venice API connection verified successfully' in 5 words.</textarea>
+          </div>
+
+          <button class="btn btn-primary" id="btn-run-inference">
+            🚀 Run Inference
+          </button>
+        </div>
+
+        <div class="playground-card">
+          <h3 class="card-title">Response & Telemetry</h3>
+          <div id="play-telemetry" class="telemetry-bar">
+            <span>Latency: <strong id="tel-latency">-- ms</strong></span>
+            <span>Tokens: <strong id="tel-tokens">--</strong></span>
+            <span>Status: <strong id="tel-status">Idle</strong></span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Output</label>
+            <pre id="play-output-box" class="code-box">Awaiting test execution...</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: MCP SERVER -->
+    <section id="tab-mcp" class="tab-pane">
+      <div class="mcp-card">
+        <h3 class="card-title">🔌 Model Context Protocol (MCP) Integration</h3>
+        <p class="card-subtitle">Connect Cursor, Claude Desktop, Antigravity, or Hermes Agent to this Venice Key Manager MCP server.</p>
+
+        <div class="mcp-guide">
+          <h4>Configuration for Claude Desktop & Cursor</h4>
+          <p>Add the following block to your <code>claude_desktop_config.json</code> or Cursor MCP settings:</p>
+          <div class="code-header">
+            <span>claude_desktop_config.json</span>
+            <button class="btn btn-xs btn-outline copy-btn" data-copy-target="code-mcp-config">📋 Copy JSON</button>
+          </div>
+          <pre id="code-mcp-config" class="code-box mono">{
+  "mcpServers": {
+    "venice-key-manager": {
+      "command": "python",
+      "args": ["-m", "venice_key_manager.mcp_server"],
+      "env": {
+        "VENICE_API_KEY": "YOUR_VENICE_ADMIN_KEY"
+      }
+    }
+  }
+}</pre>
+        </div>
+
+        <div class="mcp-tools-list">
+          <h4>Available MCP Tools Registered</h4>
+          <div class="tools-grid">
+            <div class="tool-item"><code>venice_list_keys</code> - List keys with spend & limits</div>
+            <div class="tool-item"><code>venice_create_key</code> - Mint key with budget cap</div>
+            <div class="tool-item"><code>venice_cycle_key</code> - Rotate/replace an existing key</div>
+            <div class="tool-item"><code>venice_update_key_limit</code> - Adjust budget or period</div>
+            <div class="tool-item"><code>venice_revoke_key</code> - Delete key permanently</div>
+            <div class="tool-item"><code>venice_get_account_balance</code> - Check USD/DIEM & alerts</div>
+            <div class="tool-item"><code>venice_list_models</code> - Query models with E2EE filter</div>
+            <div class="tool-item"><code>venice_test_inference</code> - Quick health benchmark</div>
+            <div class="tool-item"><code>venice_export_backup</code> - Full state JSON backup</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: MINT NEW KEY -->
+  <!-- ========================================================================= -->
+  <div id="modal-create-key" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">➕ Mint New Venice API Key</h3>
+        <button class="modal-close" data-close-modal="modal-create-key">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Description / Agent Name <span class="required">*</span></label>
+          <input type="text" id="create-desc" class="form-control" placeholder="e.g. agent-researcher-1 or prod-service" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Category Group</label>
+          <select id="create-category" class="form-control">
+            <option value="Default">Default</option>
+            <option value="Agents">Agents</option>
+            <option value="Production">Production</option>
+            <option value="Testing">Testing</option>
+            <option value="Telegram">Telegram</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Reset Period</label>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" name="create-period" value="EPOCH" checked>
+              <span>Daily (EPOCH)</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="create-period" value="MONTH">
+              <span>Monthly (MONTH)</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="create-period" value="LIFETIME">
+              <span>Lifetime Cap</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Spending Budget Limit (USD)</label>
+          <div class="preset-buttons">
+            <button type="button" class="btn btn-xs btn-outline preset-btn" data-val="0.10">$0.10</button>
+            <button type="button" class="btn btn-xs btn-outline preset-btn active" data-val="0.50">$0.50</button>
+            <button type="button" class="btn btn-xs btn-outline preset-btn" data-val="1.00">$1.00</button>
+            <button type="button" class="btn btn-xs btn-outline preset-btn" data-val="2.00">$2.00</button>
+            <button type="button" class="btn btn-xs btn-outline preset-btn" data-val="5.00">$5.00</button>
+            <button type="button" class="btn btn-xs btn-outline preset-btn" data-val="">Unlimited</button>
+          </div>
+          <input type="number" step="0.01" min="0" id="create-limit-usd" class="form-control mt-2" value="0.50" placeholder="Custom USD amount (blank for unlimited)" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Custom Low-Balance Alert (USD, Optional)</label>
+          <input type="number" step="0.01" min="0" id="create-custom-threshold" class="form-control" placeholder="Defaults to global threshold ($0.20)" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Key Type</label>
+          <select id="create-type" class="form-control">
+            <option value="INFERENCE" selected>INFERENCE (Standard model calling)</option>
+            <option value="ADMIN">ADMIN (Can create and delete keys)</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal="modal-create-key">Cancel</button>
+        <button class="btn btn-primary" id="btn-submit-create-key">Create Key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: KEY CREATED SUCCESS (ONE-TIME REVEAL) -->
+  <!-- ========================================================================= -->
+  <div id="modal-key-revealed" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">🎉 Key Successfully Minted</h3>
+        <button class="modal-close" data-close-modal="modal-key-revealed">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="alert-box-success">
+          <strong>Save this key immediately!</strong> Venice.ai never displays the full token again.
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">API Key Token</label>
+          <div class="copy-input-row">
+            <input type="text" id="revealed-key-token" class="form-control mono" readonly />
+            <button class="btn btn-primary copy-btn" data-copy-target="revealed-key-token">📋 Copy</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Key ID</label>
+          <div class="copy-input-row">
+            <input type="text" id="revealed-key-id" class="form-control mono text-sm" readonly />
+            <button class="btn btn-secondary copy-btn" data-copy-target="revealed-key-id">📋 Copy ID</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Fast cURL Test Snippet</label>
+          <div class="code-header">
+            <span>Shell snippet</span>
+            <button class="btn btn-xs btn-outline copy-btn" data-copy-target="revealed-curl">📋 Copy cURL</button>
+          </div>
+          <pre id="revealed-curl" class="code-box mono text-xs"></pre>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" data-close-modal="modal-key-revealed">I Have Saved It</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: CYCLE / ROTATE KEY -->
+  <!-- ========================================================================= -->
+  <div id="modal-cycle-key" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">🔄 Cycle / Rotate API Key</h3>
+        <button class="modal-close" data-close-modal="modal-cycle-key">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">
+          Rotating a key creates a new replacement key with matching settings and budget limits, and cleanly revokes the existing key to prevent leaks.
+        </p>
+        <input type="hidden" id="cycle-key-id" />
+
+        <div class="key-summary-card" id="cycle-summary-card">
+          <!-- Populated dynamically -->
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">New Spending Limit (USD, leave blank to keep existing)</label>
+          <input type="number" step="0.01" min="0" id="cycle-new-limit" class="form-control" placeholder="Keep current limit" />
+        </div>
+
+        <div class="form-group">
+          <label class="toggle-control">
+            <input type="checkbox" id="cycle-revoke-old" checked>
+            <span class="toggle-label">Immediately revoke and delete old key</span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal="modal-cycle-key">Cancel</button>
+        <button class="btn btn-warning" id="btn-submit-cycle-key">🔄 Cycle Key Now</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: EDIT KEY LIMITS & METADATA -->
+  <!-- ========================================================================= -->
+  <div id="modal-edit-key" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">✏️ Edit Key Spending Limit & Category</h3>
+        <button class="modal-close" data-close-modal="modal-edit-key">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="edit-key-id" />
+
+        <div class="form-group">
+          <label class="form-label">Description Label</label>
+          <input type="text" id="edit-key-desc" class="form-control" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Category Group</label>
+          <select id="edit-key-category" class="form-control"></select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Spending Budget Limit (USD)</label>
+          <input type="number" step="0.01" min="0" id="edit-key-limit" class="form-control" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Custom Low-Balance Warning (USD)</label>
+          <input type="number" step="0.01" min="0" id="edit-key-threshold" class="form-control" placeholder="Defaults to global" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Reset Period</label>
+          <select id="edit-key-period" class="form-control">
+            <option value="EPOCH">Daily (EPOCH)</option>
+            <option value="MONTH">Monthly (MONTH)</option>
+            <option value="LIFETIME">Lifetime Cap</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal="modal-edit-key">Cancel</button>
+        <button class="btn btn-primary" id="btn-submit-edit-key">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: SETTINGS & THRESHOLDS -->
+  <!-- ========================================================================= -->
+  <div id="modal-settings" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">⚙️ Global Settings & Warning Thresholds</h3>
+        <button class="modal-close" data-close-modal="modal-settings">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Global Low USD Warning Threshold ($)</label>
+          <p class="form-hint">Triggers warning banner and alert badges when account balance or remaining key spend drops below this value.</p>
+          <input type="number" step="0.01" min="0.01" id="settings-global-threshold" class="form-control" value="0.20" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Categories Management</label>
+          <div class="category-manager-list" id="settings-categories-list"></div>
+          <div class="input-with-button mt-2">
+            <input type="text" id="new-category-input" class="form-control" placeholder="New category name..." />
+            <button class="btn btn-secondary" id="btn-save-new-category">Add</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal="modal-settings">Cancel</button>
+        <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: STATE & SETTINGS BACKUP -->
+  <!-- ========================================================================= -->
+  <div id="modal-backup" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">💾 Download & Restore State Backup</h3>
+        <button class="modal-close" data-close-modal="modal-backup">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="backup-section">
+          <h4>Download Current State</h4>
+          <p class="modal-desc">
+            Export a full JSON backup of categories, custom per-key thresholds, notes, and global alert settings.
+          </p>
+          <a href="/api/backup/export" class="btn btn-primary" download>
+            📥 Download Settings Backup (JSON)
+          </a>
+        </div>
+
+        <hr class="modal-divider" />
+
+        <div class="backup-section">
+          <h4>Restore from Backup File</h4>
+          <p class="modal-desc">Upload a previously exported JSON backup to restore categories and threshold settings.</p>
+          <input type="file" id="backup-file-input" accept=".json" class="form-control" />
+          <button class="btn btn-secondary mt-2" id="btn-upload-backup">
+            📤 Restore from File
+          </button>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal="modal-backup">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

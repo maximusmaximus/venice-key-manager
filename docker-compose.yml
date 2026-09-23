@@ -1,0 +1,17 @@
+services:
+  venice-key-manager:
+    build: .
+    container_name: venice-key-manager
+    restart: unless-stopped
+    ports:
+      - "8660:8660" # Web Dashboard
+      - "8661:8661" # MCP Server
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8660/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

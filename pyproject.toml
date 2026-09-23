@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "venice-key-manager"
+version = "1.0.0"
+description = "Enterprise-grade Venice.ai API Key Lifecycle, MCP Server, Web Dashboard & Telegram Bot"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [
+    { name = "Venice Open Source Community" }
+]
+keywords = ["venice", "venice-ai", "api-keys", "mcp", "model-context-protocol", "fastapi", "telegram-bot"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence"
+]
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.28.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.6.0",
+    "python-dotenv>=1.0.1",
+    "jinja2>=3.1.3",
+    "python-multipart>=0.0.9"
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0.0"]
+test = ["pytest>=8.0.0", "pytest-asyncio>=0.23.5"]
+
+[project.scripts]
+venice-key-manager = "venice_key_manager.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["venice_key_manager*"]
