@@ -16,6 +16,10 @@ from ..report import DailyKeyReport
 logger = logging.getLogger("venice_tg_bot")
 
 
+def clean_html(s: Any) -> str:
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 class VeniceTelegramBot:
     def __init__(self, token: Optional[str] = None, client: Optional[VeniceClient] = None):
         self.token = token or config.telegram_bot_token
@@ -67,7 +71,7 @@ class VeniceTelegramBot:
         chat_id: int,
         text: str,
         reply_markup: Optional[Dict[str, Any]] = None,
-        parse_mode: str = "Markdown",
+        parse_mode: str = "HTML",
     ):
         payload = {
             "chat_id": chat_id,
@@ -79,19 +83,25 @@ class VeniceTelegramBot:
 
     async def handle_start(self, chat_id: int):
         msg = (
-            "⚡ *Venice.ai Key Manager Control Plane*\n\n"
-            "Welcome! You can create, manage, rotate, and monitor Venice API keys, "
-            "track inference balances, and test models in real time.\n\n"
-            "Use the touch buttons below or slash commands:\n"
-            "• `/balance` - Check live USD/DIEM balance & rate limits\n"
-            "• `/keys` - List all active keys & remaining budgets\n"
-            "• `/create <name> [usd]` - Mint dedicated sub-key\n"
-            "• `/cycle <key_id>` - Rotate/replace an existing key\n"
-            "• `/test` - Run lightweight inference benchmark\n"
-            "• `/models` - Confidential E2EE enclave models\n"
-            "• `/backup` - Download state & settings JSON"
+            "⚡ <b>VENICE KEY MANAGER — CONTROL PLANE</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Enterprise key management, spend telemetry, and confidential enclave model orchestration for Venice.ai.\n\n"
+            "📋 <b>OPERATIONAL TOUCH CONTROLS</b>\n"
+            "─────────────────────────────────────\n"
+            "• 📊 <b>/balance</b> — Live USD &amp; DIEM treasury\n"
+            "• 🔑 <b>/keys</b> — Active key inventory &amp; limits\n"
+            "• 📋 <b>/report</b> — Comprehensive operations report\n"
+            "• ⚠️ <b>/alert</b> — Low balance keys &amp; budget alerts\n"
+            "• ➕ <b>/create</b> — Mint dedicated key with budget\n"
+            "• 🔄 <b>/cycle</b> — Rotate/replace active key\n"
+            "• ⚡ <b>/test</b> — Lightweight inference benchmark\n"
+            "• 🔒 <b>/models</b> — Confidential E2EE enclave models\n"
+            "• 🌐 <b>/dashboard</b> — Web control plane magic link\n"
+            "• 💾 <b>/backup</b> — Download state JSON backup\n\n"
+            "🌐 <b>Web Control Plane:</b> <code>http://localhost:8660</code>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         )
-        await self.send_message(chat_id, msg)
+        await self.send_message(chat_id, msg, parse_mode="HTML")
 
     async def handle_balance(self, chat_id: int):
         try:
@@ -99,24 +109,31 @@ class VeniceTelegramBot:
             thresh = state_store.get_global_threshold()
             usd = rates.balances.USD
             diem = rates.balances.DIEM
+            credits_val = rates.balances.BUNDLED_CREDITS
             is_low = usd <= thresh
-
-            warn_badge = "\n\n⚠️ *LOW BALANCE WARNING:* Account balance is below threshold!" if is_low else ""
+            status_icon = "🟢" if rates.accessPermitted else "🔴"
+            status_text = "Active &amp; Permitted" if rates.accessPermitted else "Restricted / Inactive"
+            alert_str = " ⚠️ <b>[CRITICAL LOW]</b>" if is_low else ""
 
             msg = (
-                f"📊 *Venice Account Status*\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"💵 *USD Balance:* `${usd:.4f}`\n"
-                f"💎 *DIEM Balance:* `{diem:.4f}`\n"
-                f"🛡️ *Access Status:* `{'Active / Permitted' if rates.accessPermitted else 'Restricted'}`\n"
-                f"⚙️ *Tier:* `{rates.apiTier.id if rates.apiTier else 'paid'}`\n"
-                f"⏳ *Next Epoch Reset:* `{rates.nextEpochBegins or '00:00 UTC'}`\n"
-                f"🔔 *Warning Threshold:* `${thresh:.2f}`"
-                f"{warn_badge}"
+                "📊 <b>VENICE.AI TREASURY &amp; RATE LIMITS</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "💰 <b>FINANCIAL HEALTH &amp; BALANCES</b>\n"
+                "─────────────────────────────────────\n"
+                f"  💵 <b>Master USD Balance:</b>        <code>${usd:.4f} USD</code>{alert_str}\n"
+                f"  💎 <b>DIEM Token Balance:</b>        <code>{diem:.4f} DIEM</code>\n"
+                f"  🎟️ <b>Bundled Compute Credits:</b>   <code>{credits_val:.4f}</code>\n\n"
+                "⚙️ <b>SYSTEM PERMISSIONS &amp; TIER</b>\n"
+                "─────────────────────────────────────\n"
+                f"  {status_icon} <b>Access Status:</b>          <code>{status_text}</code>\n"
+                f"  🏷️ <b>Subscription Tier:</b>         <code>{rates.apiTier.id if rates.apiTier else 'paid'}</code>\n"
+                f"  ⏳ <b>Next Epoch Reset:</b>          <code>{clean_html(rates.nextEpochBegins or '00:00 UTC')}</code>\n"
+                f"  🛡️ <b>Warning Threshold:</b>         <code>${thresh:.2f} USD</code>\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             )
-            await self.send_message(chat_id, msg)
+            await self.send_message(chat_id, msg, parse_mode="HTML")
         except Exception as e:
-            await self.send_message(chat_id, f"❌ Failed to query balance: {e}")
+            await self.send_message(chat_id, f"❌ Failed to query balance: {clean_html(e)}")
 
     async def handle_list_keys(self, chat_id: int):
         try:
@@ -126,42 +143,49 @@ class VeniceTelegramBot:
                 return
 
             low_keys = [k for k in keys if k.is_low_balance]
-            msg = f"🔑 *Active Venice Keys ({len(keys)} total, {len(low_keys)} low-balance)*\n━━━━━━━━━━━━━━━━━━\n"
+            lines = [
+                "🔑 <b>VENICE.AI PROVISIONED API KEYS</b>",
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                f"📊 <b>Fleet Inventory:</b> <code>{len(keys)} active keys</code>" + (f" (⚠️ <b>{len(low_keys)} low balance</b>)" if low_keys else " (🟢 <i>All healthy</i>)"),
+                "",
+                "🏷️ <b>KEY INVENTORY &amp; CONSUMPTION CEILINGS</b>",
+                "─────────────────────────────────────",
+            ]
 
-            for k in keys[:10]:  # Show top 10
-                name = k.description or "Unnamed"
-                last6 = k.last6Chars or "••••••"
+            for idx, k in enumerate(keys[:10], 1):
+                name = clean_html(k.description or "Unnamed")
+                last6 = clean_html(k.last6Chars or "••••••")
+                cat = clean_html(k.category)
                 spent = float(k.currentPeriodUsage.usd or 0)
                 limit = f"${k.consumptionLimits.usd:.2f}" if (k.consumptionLimits and k.consumptionLimits.usd is not None) else "Unlimited"
                 rem = f"${k.remaining_usd:.4f}" if k.remaining_usd is not None else "--"
-                warn = " ⚠️ *LOW*" if k.is_low_balance else ""
+                status_badge = "🚨 <b>LOW</b>" if k.is_low_balance else "🟢"
 
-                msg += (
-                    f"• *{name}* `(...{last6})` [{k.category}]\n"
-                    f"  Spend: `${spent:.4f}` / {limit} ({k.limitPeriod})\n"
-                    f"  Remaining: {rem}{warn}\n"
-                    f"  _ID: `{k.id}`_\n\n"
-                )
+                lines.append(f"{idx}️⃣ <b>{name}</b> (<code>...{last6}</code>) · [<code>{cat}</code>]")
+                lines.append(f"   ↳ {status_badge} Remaining: <code>{rem}</code> / <code>{limit}</code> ({k.limitPeriod})")
+                lines.append("")
 
             if len(keys) > 10:
-                msg += f"_...and {len(keys) - 10} more keys. View Web Dashboard for complete list._"
+                lines.append(f"ℹ️ <i>Showing 10 of {len(keys)} keys. View full fleet in Web Dashboard.</i>\n")
 
-            # Provide inline button to cycle or create
+            lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
             inline_kb = {
                 "inline_keyboard": [
                     [{"text": "➕ Mint New Key", "callback_data": "start_mint"}],
                     [{"text": "🔄 Rotate / Cycle Key", "callback_data": "start_cycle"}],
                 ]
             }
-            await self.send_message(chat_id, msg, reply_markup=inline_kb)
+            await self.send_message(chat_id, "\n".join(lines), reply_markup=inline_kb, parse_mode="HTML")
         except Exception as e:
-            await self.send_message(chat_id, f"❌ Failed to list keys: {e}")
+            await self.send_message(chat_id, f"❌ Failed to list keys: {clean_html(e)}")
 
     async def handle_start_mint_flow(self, chat_id: int, user_id: int):
         self.user_state[user_id] = {"action": "awaiting_mint_name"}
         await self.send_message(
             chat_id,
-            "➕ *Mint New Key: Step 1/2*\n\nPlease reply with the **name or description** for the new key (e.g. `agent-worker-1`):"
+            "➕ <b>Mint New Key: Step 1/2</b>\n\nPlease reply with the <b>name or description</b> for the new key (e.g. <code>agent-worker-1</code>):",
+            parse_mode="HTML"
         )
 
     async def handle_mint_name_input(self, chat_id: int, user_id: int, name: str):
@@ -183,8 +207,9 @@ class VeniceTelegramBot:
         }
         await self.send_message(
             chat_id,
-            f"➕ *Mint New Key: Step 2/2*\n\nKey Name: *{name}*\nSelect daily spending budget ceiling:",
-            reply_markup=inline_kb
+            f"➕ <b>Mint New Key: Step 2/2</b>\n\nKey Name: <b>{clean_html(name)}</b>\nSelect daily spending budget ceiling:",
+            reply_markup=inline_kb,
+            parse_mode="HTML"
         )
 
     async def handle_mint_complete(self, chat_id: int, user_id: int, budget_val: Optional[float]):
@@ -201,19 +226,25 @@ class VeniceTelegramBot:
 
         try:
             res = await self.client.create_key(req)
+            b_label = f"${budget_val:.2f} USD (daily)" if budget_val else "Unlimited"
             msg = (
-                f"🎉 *Venice Key Successfully Minted!*\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"🏷️ *Name:* `{res.description}`\n"
-                f"🆔 *Key ID:* `{res.id}`\n"
-                f"💵 *Daily Limit:* `${budget_val:.2f}`\n"
-                f"📁 *Category:* `{res.category}`\n\n"
-                f"🔑 *API Key Token:*\n`{res.apiKey}`\n\n"
-                f"⚠️ *Important:* Copy and store this token now. It will not be shown again."
+                "🎉 <b>VENICE KEY SUCCESSFULLY MINTED</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "📋 <b>PROVISIONED KEY DETAILS</b>\n"
+                "─────────────────────────────────────\n"
+                f"  🏷️ <b>Description:</b>  <code>{clean_html(res.description)}</code>\n"
+                f"  🆔 <b>Key ID:</b>       <code>{res.id}</code>\n"
+                f"  💵 <b>Spend Limit:</b>  <code>{b_label}</code>\n"
+                f"  📁 <b>Category:</b>     <code>{clean_html(res.category)}</code>\n\n"
+                "🔑 <b>API SECRET TOKEN</b>\n"
+                "─────────────────────────────────────\n"
+                f"<code>{res.apiKey}</code>\n\n"
+                "⚠️ <b>Important:</b> <i>Copy and store this secret key now. It will never be displayed again.</i>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             )
-            await self.send_message(chat_id, msg)
+            await self.send_message(chat_id, msg, parse_mode="HTML")
         except Exception as e:
-            await self.send_message(chat_id, f"❌ Key minting failed: {e}")
+            await self.send_message(chat_id, f"❌ Key minting failed: {clean_html(e)}")
 
     async def handle_cycle_prompt(self, chat_id: int):
         try:
@@ -230,65 +261,91 @@ class VeniceTelegramBot:
             inline_kb = {"inline_keyboard": buttons}
             await self.send_message(
                 chat_id,
-                "🔄 *Select Key to Rotate / Cycle:*\n\nThe old key will be replaced with a fresh token having matching budget limits.",
-                reply_markup=inline_kb
+                "🔄 <b>Select Key to Rotate / Cycle:</b>\n\nThe previous key will be revoked and replaced with a fresh token having matching budget limits.",
+                reply_markup=inline_kb,
+                parse_mode="HTML"
             )
         except Exception as e:
-            await self.send_message(chat_id, f"❌ Error: {e}")
+            await self.send_message(chat_id, f"❌ Error: {clean_html(e)}")
 
     async def handle_execute_cycle(self, chat_id: int, key_id: str):
         req = KeyCycleRequest(id=key_id, revoke_old=True)
         try:
             new_key_resp, revoked = await self.client.cycle_key(req)
             msg = (
-                f"🔄 *Key Rotated Successfully!*\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"🏷️ *Name:* `{new_key_resp.description}`\n"
-                f"🆔 *New Key ID:* `{new_key_resp.id}`\n"
-                f"🗑️ *Old Key Revoked:* `{'Yes' if revoked else 'No'}`\n\n"
-                f"🔑 *New Token:*\n`{new_key_resp.apiKey}`\n\n"
-                f"Update your services with the new token."
+                "🔄 <b>VENICE KEY ROTATED SUCCESSFULLY</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "📋 <b>ROTATION AUDIT DETAILS</b>\n"
+                "─────────────────────────────────────\n"
+                f"  🏷️ <b>Name:</b>             <code>{clean_html(new_key_resp.description)}</code>\n"
+                f"  🆔 <b>New Key ID:</b>       <code>{new_key_resp.id}</code>\n"
+                f"  🗑️ <b>Previous Key:</b>      <code>{'Revoked' if revoked else 'Active'}</code>\n\n"
+                "🔑 <b>NEW API SECRET TOKEN</b>\n"
+                "─────────────────────────────────────\n"
+                f"<code>{new_key_resp.apiKey}</code>\n\n"
+                "⚠️ <i>Update dependent agents and microservices with the new token immediately.</i>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             )
-            await self.send_message(chat_id, msg)
+            await self.send_message(chat_id, msg, parse_mode="HTML")
         except Exception as e:
-            await self.send_message(chat_id, f"❌ Key rotation failed: {e}")
+            await self.send_message(chat_id, f"❌ Key rotation failed: {clean_html(e)}")
 
     async def handle_quick_test(self, chat_id: int):
-        await self.send_message(chat_id, "⚡ Running test inference against Venice `deepseek-v4-flash`...")
+        await self.send_message(chat_id, "⚡ Running test inference against Venice <code>deepseek-v4-flash</code>...", parse_mode="HTML")
         res = await self.client.test_inference(
             prompt="Respond with 'Venice API connection verified' in 4 words.",
             model="deepseek-v4-flash"
         )
-        if res.success:
-            msg = (
-                f"✅ *Inference Verified!*\n"
-                f"• *Model:* `{res.model}`\n"
-                f"• *Latency:* `{res.latency_ms} ms`\n"
-                f"• *Tokens:* `{res.total_tokens}`\n\n"
-                f"*Output:* {res.output}"
-            )
-        else:
-            msg = f"❌ *Inference Failed:*\n`{res.error}`"
-        await self.send_message(chat_id, msg)
+        status_icon = "🟢" if res.success else "🔴"
+        status_word = "SUCCESS" if res.success else "FAILED"
+        out_text = clean_html(res.output.strip() if res.success else (res.error or "Unknown error"))
+        
+        msg = (
+            "⚡ <b>VENICE INFERENCE BENCHMARK TEST</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"{status_icon} <b>STATUS &amp; PERFORMANCE</b>\n"
+            "─────────────────────────────────────\n"
+            f"  • <b>Status:</b>       <code>{status_word}</code>\n"
+            f"  • <b>Model:</b>        <code>{res.model}</code>\n"
+            f"  • <b>Latency:</b>      <code>{res.latency_ms} ms</code>\n"
+            f"  • <b>Total Tokens:</b> <code>{res.total_tokens}</code> (Prompt: <code>{res.prompt_tokens}</code> | Completion: <code>{res.completion_tokens}</code>)\n\n"
+            "💬 <b>COMPLETION OUTPUT</b>\n"
+            "─────────────────────────────────────\n"
+            f"<code>{out_text}</code>\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        )
+        await self.send_message(chat_id, msg, parse_mode="HTML")
 
     async def handle_e2ee_models(self, chat_id: int):
         models = await self.client.list_models()
         e2ee = [m for m in models if m.privacy == "e2ee"]
 
-        msg = f"🔒 *Venice Hardware Enclave (E2EE) Models ({len(e2ee)} total)*\n━━━━━━━━━━━━━━━━━━\n"
+        lines = [
+            f"🔒 <b>VENICE CONFIDENTIAL HARDWARE ENCLAVE MODELS ({len(e2ee)} TOTAL)</b>",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "Hardware-isolated TEE models with zero logging &amp; confidential inference.",
+            "",
+            "🛡️ <b>CONFIDENTIAL MODEL INVENTORY</b>",
+            "─────────────────────────────────────",
+        ]
         for m in e2ee[:8]:
             in_p = f"${m.pricing.input.get('usd', 0):.2f}" if (m.pricing and m.pricing.input) else "--"
             out_p = f"${m.pricing.output.get('usd', 0):.2f}" if (m.pricing and m.pricing.output) else "--"
-            msg += f"• *{m.name}*\n  `{m.id}`\n  Price: {in_p} / {out_p} per 1M\n\n"
+            m_name = clean_html(m.name)
+            lines.append(f"• <b>{m_name}</b>")
+            lines.append(f"  ↳ ID: <code>{m.id}</code>")
+            lines.append(f"  ↳ Pricing: <code>{in_p}</code> in / <code>{out_p}</code> out per 1M tokens")
+            lines.append("")
 
-        await self.send_message(chat_id, msg)
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        await self.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
 
     async def handle_daily_report(self, chat_id: int):
         await self.send_message(chat_id, "⏳ Generating real-time Venice keys operations report...")
         reporter = DailyKeyReport(client=self.client)
         data = await reporter.generate_report_data()
-        msg = reporter.format_markdown(data)
-        await self.send_message(chat_id, msg)
+        msg = reporter.format_telegram_html(data)
+        await self.send_message(chat_id, msg, parse_mode="HTML")
 
     async def handle_low_balance_alert(self, chat_id: int):
         rates = await self.client.get_rate_limits()
@@ -298,24 +355,41 @@ class VeniceTelegramBot:
         acc_low = rates.balances.USD <= thresh
 
         if not acc_low and not low_keys:
-            await self.send_message(
-                chat_id,
-                f"✅ *All Balances Healthy!*\n\n"
-                f"• Master USD: `${rates.balances.USD:.4f}` (Threshold: `${thresh:.2f}`)\n"
-                f"• All `{len(keys)}` active keys have sufficient remaining budget."
+            msg = (
+                "⚠️ <b>VENICE BUDGET &amp; LOW BALANCE ALERTS</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "✅ <b>ALL BALANCES HEALTHY</b>\n"
+                "─────────────────────────────────────\n"
+                f"  💵 <b>Master USD:</b> <code>${rates.balances.USD:.4f} USD</code> (Threshold: <code>${thresh:.2f}</code>)\n"
+                f"  🔑 <b>Key Fleet:</b> All <code>{len(keys)}</code> active keys operating above warning threshold.\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             )
+            await self.send_message(chat_id, msg, parse_mode="HTML")
             return
 
-        lines = ["⚠️ *VENICE LOW BALANCE WARNINGS*", "━━━━━━━━━━━━━━━━━━"]
+        lines = [
+            "⚠️ <b>VENICE BUDGET &amp; LOW BALANCE ALERTS</b>",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "",
+            "🚨 <b>CRITICAL BUDGET WARNINGS</b>",
+            "─────────────────────────────────────",
+        ]
         if acc_low:
-            lines.append(f"• 🚨 *Master Account:* `${rates.balances.USD:.4f}` USD remaining (Under `${thresh:.2f}`)")
+            lines.append(f"  🚨 <b>Master Treasury:</b> <code>${rates.balances.USD:.4f} USD</code> remaining (Under <code>${thresh:.2f}</code> threshold)")
+            lines.append("")
+
         for k in low_keys:
             rem = f"${k.remaining_usd:.4f}" if k.remaining_usd is not None else "--"
-            lim = f"${k.consumptionLimits.usd:.2f}" if k.consumptionLimits else "--"
-            lines.append(f"• ⚠️ `{k.description or k.id}`: `{rem}` left / `{lim}` budget [{k.category}]")
+            lim = f"${k.consumptionLimits.usd:.2f}" if (k.consumptionLimits and k.consumptionLimits.usd is not None) else "Unlimited"
+            k_name = clean_html(k.description or k.id)
+            k_cat = clean_html(k.category)
+            lines.append(f"  ⚠️ <b>{k_name}</b> (<code>...{k.last6Chars}</code>) · [<code>{k_cat}</code>]")
+            lines.append(f"     ↳ Remaining: <code>{rem}</code> / <code>{lim}</code> ceiling")
+            lines.append("")
 
-        lines.append("\nTop up your balance on Venice or rotate/cycle saturated keys.")
-        await self.send_message(chat_id, "\n".join(lines))
+        lines.append("💡 <i>Action Required: Top up account or rotate/cycle saturated keys.</i>")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        await self.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
 
     async def handle_dashboard_link(self, chat_id: int):
         token = state_store.create_auth_token(created_by=f"telegram:{chat_id}")
@@ -323,15 +397,21 @@ class VeniceTelegramBot:
         magic_url = f"{base_url}/?token={token}"
 
         msg = (
-            "🌐 *Venice Key Manager — Web Dashboard Access*\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "The web dashboard is protected. Access requires an authenticated Telegram session key.\n\n"
-            f"🔗 *Single-Click Magic Link:*\n{magic_url}\n\n"
-            f"🔑 *Pasteable Access Key:*\n`{token}`\n\n"
-            "⏱️ *Validity:* 7 days\n"
-            "🔒 Opening the magic link automatically authenticates and unlocks your control plane."
+            "🌐 <b>VENICE CONTROL PLANE — WEB DASHBOARD</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "The web dashboard is protected behind an authentication gate.\n"
+            "Your cryptographic session token has been minted below:\n\n"
+            "🔗 <b>SINGLE-CLICK MAGIC LINK</b>\n"
+            "─────────────────────────────────────\n"
+            f"<a href=\"{magic_url}\">{magic_url}</a>\n\n"
+            "🔑 <b>PASTEABLE ACCESS KEY</b>\n"
+            "─────────────────────────────────────\n"
+            f"<code>{token}</code>\n\n"
+            "⏱️ <b>Session Validity:</b> <code>7 days</code>\n"
+            "🔒 <i>Tap the magic link to unlock your real-time control plane automatically.</i>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         )
-        await self.send_message(chat_id, msg)
+        await self.send_message(chat_id, msg, parse_mode="HTML")
 
     # =========================================================================
     # Polling Loop

@@ -126,15 +126,17 @@ def main():
         if args.json:
             print(json.dumps([k.model_dump() for k in keys], indent=2))
         else:
-            print(f"\n🔑 Total Keys: {len(keys)}")
-            print(f"{'Description':<28} {'Category':<12} {'Limit':<12} {'Period':<8} {'Remaining':<14} {'Last 6'}")
-            print("-" * 85)
+            print("\n🔑 VENICE.AI PROVISIONED API KEYS")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            print(f"📊 Fleet Inventory: {len(keys)} active keys\n")
+            print(f"{'Key Description':<28} {'Category':<12} {'Limit':<12} {'Period':<8} {'Remaining':<14} {'Last 6'}")
+            print("─" * 85)
             for k in keys:
                 limit_str = f"${k.consumptionLimits.usd:.2f}" if (k.consumptionLimits and k.consumptionLimits.usd is not None) else "Unlimited"
                 rem_str = f"${k.remaining_usd:.4f}" if k.remaining_usd is not None else "--"
                 warn = " ⚠️" if k.is_low_balance else ""
                 print(f"{k.description[:26]:<28} {k.category:<12} {limit_str:<12} {k.limitPeriod:<8} {rem_str + warn:<14} ...{k.last6Chars}")
-            print()
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
     elif args.command == "create":
         client = VeniceClient()
@@ -180,13 +182,21 @@ def main():
         rates = asyncio.run(client.get_rate_limits())
         thresh = state_store.get_global_threshold()
         is_low = rates.balances.USD <= thresh
-        print("\n📊 Venice.ai Account Balance & Limits:")
-        print(f"• USD Balance:      ${rates.balances.USD:.4f}" + (" ⚠️ LOW BALANCE" if is_low else ""))
-        print(f"• DIEM Balance:     {rates.balances.DIEM:.4f}")
-        print(f"• Credits:          {rates.balances.BUNDLED_CREDITS:.4f}")
-        print(f"• Access Status:    {'Permitted / Active' if rates.accessPermitted else 'Restricted'}")
-        print(f"• Next Epoch:       {rates.nextEpochBegins or '00:00 UTC'}")
-        print(f"• Alert Threshold:  ${thresh:.2f}\n")
+        status_icon = "🟢" if rates.accessPermitted else "🔴"
+        status_text = "Active & Permitted" if rates.accessPermitted else "Restricted"
+        alert_flag = " ⚠️ [LOW BALANCE CRITICAL]" if is_low else ""
+
+        print("\n📊 VENICE.AI TREASURY & ACCOUNT BALANCES")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("💰 FINANCIAL HEALTH & BALANCES")
+        print("─────────────────────────────────────────────────")
+        print(f"  💵 Master USD Balance:        ${rates.balances.USD:.4f} USD{alert_flag}")
+        print(f"  💎 DIEM Token Balance:        {rates.balances.DIEM:.4f} DIEM")
+        print(f"  🎟️ Bundled Compute Credits:   {rates.balances.BUNDLED_CREDITS:.4f}")
+        print(f"  {status_icon} API Access Status:         {status_text}")
+        print(f"  ⏳ Rate-Limit Epoch Reset:    {rates.nextEpochBegins or '00:00 UTC'}")
+        print(f"  🛡️ Global Warning Threshold:  ${thresh:.2f} USD")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
     elif args.command == "test":
         client = VeniceClient()
@@ -230,9 +240,12 @@ def main():
         token = state_store.create_auth_token(created_by=args.user)
         base = (args.base_url or config.dashboard_base_url).rstrip("/")
         magic_url = f"{base}/?token={token}"
-        print("🌐 Venice Key Manager Dashboard Access:")
-        print(f"🔗 Single-Click Magic Link: {magic_url}")
-        print(f"🔑 Telegram Access Key: {token}")
+        print("\n🌐 VENICE CONTROL PLANE — DASHBOARD ACCESS")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("  🔗 Single-Click Magic Link: " + magic_url)
+        print(f"  🔑 Telegram Access Key:     {token}")
+        print("  ⏱️ Session Validity:        7 days")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
     elif args.command == "auth":
         if args.auth_action == "create-token":

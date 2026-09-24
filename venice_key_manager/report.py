@@ -71,12 +71,16 @@ class DailyKeyReport:
 
         usd_balance = rates.balances.USD
         is_account_low = usd_balance <= global_thresh
+        bundled_credits = float(getattr(rates.balances, "BUNDLED_CREDITS", 0.0) or 0.0)
+        now_dt = datetime.utcnow()
 
         return {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": now_dt.isoformat() + "Z",
+            "timestamp_human": now_dt.strftime("%Y-%m-%d %H:%M:%S UTC"),
             "account": {
                 "balance_usd": round(usd_balance, 4),
                 "balance_diem": round(rates.balances.DIEM, 4),
+                "bundled_credits": round(bundled_credits, 4),
                 "access_permitted": rates.accessPermitted,
                 "is_low_balance": is_account_low,
                 "global_threshold": global_thresh,
@@ -105,105 +109,165 @@ class DailyKeyReport:
         }
 
     def format_markdown(self, data: Dict[str, Any]) -> str:
-        """Format aggregated metrics into a clean, human-readable Telegram / terminal card."""
+        """Format aggregated metrics with organizational practices, emoji headlines, and clean spacing."""
         acc = data["account"]
         summary = data["summary"]
         status_icon = "🟢" if acc["access_permitted"] else "🔴"
-        alert_flag = " ⚠️ *LOW BALANCE ALERT*" if acc["is_low_balance"] else ""
+        status_text = "Active & Permitted" if acc["access_permitted"] else "Restricted"
+        overall_health = "🟢 HEALTHY" if not acc["is_low_balance"] and summary["low_balance_keys_count"] == 0 else "⚠️ ATTENTION REQUIRED"
+        alert_flag = " ⚠️ [LOW BALANCE CRITICAL]" if acc["is_low_balance"] else ""
+        gen_time = data.get("timestamp_human") or (data.get("timestamp", "")[:19].replace("T", " ") + " UTC")
+
+        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
 
         lines = [
-            "📋 *VENICE.AI DAILY KEY OPERATIONS & USAGE REPORT*",
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            f"💰 *Account Financial Health:*",
-            f"• *USD Balance:* `${acc['balance_usd']:.4f}`{alert_flag}",
-            f"• *DIEM Balance:* `{acc['balance_diem']:.4f}`",
-            f"• *Access Status:* {status_icon} `{'Active / Permitted' if acc['access_permitted'] else 'Restricted'}`",
-            f"• *Reset Window:* `{acc['next_epoch_begins'] or '00:00 UTC'}`",
+            "📋 VENICE.AI DAILY KEY OPERATIONS & USAGE REPORT",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"📅 Generated: {gen_time}  |  Status: {overall_health}",
             "",
-            f"📊 *Fleet Spend & Capacity Metrics:*",
-            f"• *Total Active Keys:* `{summary['total_keys']}`",
-            f"• *Spend Today (Current Period):* `${summary['total_spend_today']:.4f}`",
-            f"• *7-Day Trailing Spend:* `${summary['total_spend_7d']:.4f}`",
-            f"• *Keys Under Warning Ceiling:* `{summary['low_balance_keys_count']}` keys",
+            "💰 FINANCIAL HEALTH & TREASURY",
+            "─────────────────────────────────────────────────",
+            f"  💵 Master USD Balance:        ${acc['balance_usd']:.4f} USD{alert_flag}",
+            f"  💎 DIEM Token Balance:        {acc['balance_diem']:.4f} DIEM",
+            f"  🎟️ Bundled Compute Credits:   {acc.get('bundled_credits', 0.0):.4f}",
+            f"  {status_icon} API Access Status:         {status_text}",
+            f"  ⏳ Rate-Limit Epoch Reset:    {acc['next_epoch_begins'] or '00:00 UTC'}",
+            f"  🛡️ Global Warning Threshold:  ${acc['global_threshold']:.2f} USD",
             "",
-            "📁 *Category Spend Breakdown:*",
+            "📊 FLEET CAPACITY & SPEND TELEMETRY",
+            "─────────────────────────────────────────────────",
+            f"  🔑 Total Provisioned Keys:    {summary['total_keys']} active keys",
+            f"  📈 Spend Today (Current Epoch): ${summary['total_spend_today']:.4f} USD",
+            f"  📉 7-Day Trailing Fleet Spend:  ${summary['total_spend_7d']:.4f} USD",
+            f"  🛡️ Keys Under Warning Ceiling:  {summary['low_balance_keys_count']} keys",
+            "",
+            "📁 SPEND ALLOCATION BY CATEGORY",
+            "─────────────────────────────────────────────────",
         ]
 
-        for cat, cdata in data["categories"].items():
-            if cdata["key_count"] > 0:
-                warn_s = f" ({cdata['low_balance_count']} low)" if cdata["low_balance_count"] > 0 else ""
-                lines.append(f"• *{cat}:* `{cdata['key_count']}` keys | `${cdata['total_period_spend']:.4f}` spent today{warn_s}")
-
-        # Top Consumers
-        if data["top_consumers"]:
-            lines.append("")
-            lines.append("🔝 *Top Consumers Today:*")
-            for tc in data["top_consumers"]:
-                rem_str = f" (${tc['remaining']} left)" if tc['remaining'] is not None else ""
-                lines.append(f"• `{tc['name']}` (...{tc['last6']}) [{tc['category']}]: `${tc['spend']:.4f}` / {tc['limit']}{rem_str}")
-
-        # Warning alerts
-        if data["low_keys"]:
-            lines.append("")
-            lines.append("⚠️ *Keys Nearing Spend Ceiling (< threshold):*")
-            for lk in data["low_keys"]:
-                lines.append(f"• ⚠️ `{lk['name']}`: `${lk['remaining']:.4f}` remaining (Limit: ${lk['limit']})")
+        active_categories = {k: v for k, v in data["categories"].items() if v["key_count"] > 0}
+        if active_categories:
+            for cat, cdata in active_categories.items():
+                low_warn = f" (⚠️ {cdata['low_balance_count']} low)" if cdata["low_balance_count"] > 0 else ""
+                k_label = "key" if cdata["key_count"] == 1 else "keys"
+                lines.append(f"  🏷️ {cat:<12} · {cdata['key_count']:>2} {k_label} · ${cdata['total_period_spend']:.4f} USD spent today{low_warn}")
+        else:
+            lines.append("  • No active category keys found.")
 
         lines.append("")
-        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        lines.append("🌐 *Web Control Plane:* `http://localhost:8660`")
+        lines.append("🔝 TOP CONSUMING KEYS (TODAY)")
+        lines.append("─────────────────────────────────────────────────")
+        if data["top_consumers"]:
+            for idx, tc in enumerate(data["top_consumers"][:5]):
+                medal = medals[idx] if idx < len(medals) else f"{idx + 1}️⃣"
+                rem_str = f" | Remaining: ${tc['remaining']:.4f}" if tc['remaining'] is not None else ""
+                period_str = f" ({tc.get('period', 'EPOCH')})" if tc.get('period') else ""
+                lines.append(f"  {medal} {tc['name']} (...{tc['last6']}) · [{tc['category']}]")
+                lines.append(f"     ↳ Spend: ${tc['spend']:.4f} / {tc['limit']}{rem_str}{period_str}")
+        else:
+            lines.append("  • No billable key usage recorded during current epoch.")
+
+        lines.append("")
+        lines.append("⚠️ KEY BUDGET & THRESHOLD ALERTS")
+        lines.append("─────────────────────────────────────────────────")
+        if data["low_keys"]:
+            for lk in data["low_keys"]:
+                rem = f"${lk['remaining']:.4f}" if lk['remaining'] is not None else "--"
+                lim = f"${lk['limit']:.2f}" if isinstance(lk['limit'], (int, float)) else str(lk['limit'])
+                lines.append(f"  🚨 {lk['name']} (...{lk['last6']}) · [{lk['category']}]")
+                lines.append(f"     ↳ Remaining: {rem} (Ceiling: {lim})")
+        else:
+            lines.append("  ✅ All active keys are healthy and operating above warning thresholds.")
+
+        lines.append("")
+        lines.append("🌐 OPERATIONS & CONTROL PLANE")
+        lines.append("─────────────────────────────────────────────────")
+        lines.append("  🖥️ Web Dashboard:  http://localhost:8660")
+        lines.append("  🤖 Telegram Bot:   @v3n15_bot")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         return "\n".join(lines)
 
     def format_telegram_html(self, data: Dict[str, Any]) -> str:
-        """Format aggregated metrics into Telegram-safe HTML."""
+        """Format aggregated metrics into Telegram-safe HTML with emojis, spacing, and organizational practices."""
         acc = data["account"]
         summary = data["summary"]
         status_icon = "🟢" if acc["access_permitted"] else "🔴"
-        alert_flag = " ⚠️ <b>LOW BALANCE ALERT</b>" if acc["is_low_balance"] else ""
+        status_text = "Active &amp; Permitted" if acc["access_permitted"] else "Restricted"
+        overall_health = "🟢 <b>HEALTHY</b>" if not acc["is_low_balance"] and summary["low_balance_keys_count"] == 0 else "⚠️ <b>ATTENTION REQUIRED</b>"
+        alert_flag = " ⚠️ <b>[LOW BALANCE CRITICAL]</b>" if acc["is_low_balance"] else ""
+        gen_time = data.get("timestamp_human") or (data.get("timestamp", "")[:19].replace("T", " ") + " UTC")
 
         def clean(s: Any) -> str:
             return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+
         lines = [
-            "📋 <b>VENICE.AI DAILY KEY OPERATIONS & USAGE REPORT</b>",
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            "💰 <b>Account Financial Health:</b>",
-            f"• <b>USD Balance:</b> <code>${acc['balance_usd']:.4f}</code>{alert_flag}",
-            f"• <b>DIEM Balance:</b> <code>{acc['balance_diem']:.4f}</code>",
-            f"• <b>Access Status:</b> {status_icon} <code>{'Active / Permitted' if acc['access_permitted'] else 'Restricted'}</code>",
-            f"• <b>Reset Window:</b> <code>{clean(acc['next_epoch_begins'] or '00:00 UTC')}</code>",
+            "📋 <b>VENICE.AI DAILY KEY OPERATIONS &amp; USAGE REPORT</b>",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"📅 <code>{clean(gen_time)}</code> | Status: {overall_health}",
             "",
-            "📊 <b>Fleet Spend & Capacity Metrics:</b>",
-            f"• <b>Total Active Keys:</b> <code>{summary['total_keys']}</code>",
-            f"• <b>Spend Today (Current Period):</b> <code>${summary['total_spend_today']:.4f}</code>",
-            f"• <b>7-Day Trailing Spend:</b> <code>${summary['total_spend_7d']:.4f}</code>",
-            f"• <b>Keys Under Warning Ceiling:</b> <code>{summary['low_balance_keys_count']}</code> keys",
+            "💰 <b>FINANCIAL HEALTH &amp; TREASURY</b>",
+            "─────────────────────────────────────",
+            f"  💵 <b>Master USD Balance:</b>        <code>${acc['balance_usd']:.4f} USD</code>{alert_flag}",
+            f"  💎 <b>DIEM Token Balance:</b>        <code>{acc['balance_diem']:.4f} DIEM</code>",
+            f"  🎟️ <b>Bundled Credits:</b>           <code>{acc.get('bundled_credits', 0.0):.4f}</code>",
+            f"  {status_icon} <b>API Access Status:</b>         <code>{status_text}</code>",
+            f"  ⏳ <b>Rate-Limit Epoch Reset:</b>   <code>{clean(acc['next_epoch_begins'] or '00:00 UTC')}</code>",
+            f"  🛡️ <b>Warning Threshold:</b>        <code>${acc['global_threshold']:.2f} USD</code>",
             "",
-            "📁 <b>Category Spend Breakdown:</b>",
+            "📊 <b>FLEET CAPACITY &amp; SPEND TELEMETRY</b>",
+            "─────────────────────────────────────",
+            f"  🔑 <b>Total Provisioned Keys:</b>    <code>{summary['total_keys']} active keys</code>",
+            f"  📈 <b>Spend Today (Current Epoch):</b> <code>${summary['total_spend_today']:.4f} USD</code>",
+            f"  📉 <b>7-Day Trailing Fleet Spend:</b>  <code>${summary['total_spend_7d']:.4f} USD</code>",
+            f"  🛡️ <b>Keys Under Warning Ceiling:</b>  <code>{summary['low_balance_keys_count']} keys</code>",
+            "",
+            "📁 <b>SPEND ALLOCATION BY CATEGORY</b>",
+            "─────────────────────────────────────",
         ]
 
-        for cat, cdata in data["categories"].items():
-            if cdata["key_count"] > 0:
-                warn_s = f" ({cdata['low_balance_count']} low)" if cdata["low_balance_count"] > 0 else ""
-                lines.append(f"• <b>{clean(cat)}:</b> <code>{cdata['key_count']}</code> keys | <code>${cdata['total_period_spend']:.4f}</code> spent today{warn_s}")
-
-        if data["top_consumers"]:
-            lines.append("")
-            lines.append("🔝 <b>Top Consumers Today:</b>")
-            for tc in data["top_consumers"]:
-                rem_str = f" (${tc['remaining']} left)" if tc['remaining'] is not None else ""
-                lines.append(f"• <code>{clean(tc['name'])}</code> (...{clean(tc['last6'])}) [{clean(tc['category'])}]: <code>${tc['spend']:.4f}</code> / {clean(tc['limit'])}{rem_str}")
-
-        if data["low_keys"]:
-            lines.append("")
-            lines.append("⚠️ <b>Keys Nearing Spend Ceiling (&lt; threshold):</b>")
-            for lk in data["low_keys"]:
-                lines.append(f"• ⚠️ <code>{clean(lk['name'])}</code>: <code>${lk['remaining']:.4f}</code> remaining (Limit: ${lk['limit']})")
+        active_categories = {k: v for k, v in data["categories"].items() if v["key_count"] > 0}
+        if active_categories:
+            for cat, cdata in active_categories.items():
+                low_warn = f" (⚠️ <b>{cdata['low_balance_count']} low</b>)" if cdata["low_balance_count"] > 0 else ""
+                k_label = "key" if cdata["key_count"] == 1 else "keys"
+                lines.append(f"  🏷️ <b>{clean(cat)}:</b> <code>{cdata['key_count']} {k_label}</code> · <code>${cdata['total_period_spend']:.4f} USD</code>{low_warn}")
+        else:
+            lines.append("  • <i>No active category keys found.</i>")
 
         lines.append("")
-        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        lines.append("🌐 <b>Web Control Plane:</b> <code>http://localhost:8660</code>")
+        lines.append("🔝 <b>TOP CONSUMING KEYS (TODAY)</b>")
+        lines.append("─────────────────────────────────────")
+        if data["top_consumers"]:
+            for idx, tc in enumerate(data["top_consumers"][:5]):
+                medal = medals[idx] if idx < len(medals) else f"{idx + 1}️⃣"
+                rem_str = f" | Remaining: <code>${tc['remaining']:.4f}</code>" if tc['remaining'] is not None else ""
+                period_str = f" ({clean(tc.get('period', 'EPOCH'))})" if tc.get('period') else ""
+                lines.append(f"  {medal} <b>{clean(tc['name'])}</b> (<code>...{clean(tc['last6'])}</code>) · [<code>{clean(tc['category'])}</code>]")
+                lines.append(f"     ↳ Spend: <code>${tc['spend']:.4f}</code> / <code>{clean(tc['limit'])}</code>{rem_str}{period_str}")
+        else:
+            lines.append("  • <i>No billable key usage recorded during current epoch.</i>")
+
+        lines.append("")
+        lines.append("⚠️ <b>KEY BUDGET &amp; THRESHOLD ALERTS</b>")
+        lines.append("─────────────────────────────────────")
+        if data["low_keys"]:
+            for lk in data["low_keys"]:
+                rem = f"${lk['remaining']:.4f}" if lk['remaining'] is not None else "--"
+                lim = f"${lk['limit']:.2f}" if isinstance(lk['limit'], (int, float)) else str(lk['limit'])
+                lines.append(f"  🚨 <b>{clean(lk['name'])}</b> (<code>...{clean(lk['last6'])}</code>) · [<code>{clean(lk['category'])}</code>]")
+                lines.append(f"     ↳ Remaining: <code>{rem}</code> (Ceiling: <code>{lim}</code>)")
+        else:
+            lines.append("  ✅ <i>All active keys are healthy and operating above warning thresholds.</i>")
+
+        lines.append("")
+        lines.append("🌐 <b>OPERATIONS &amp; CONTROL PLANE</b>")
+        lines.append("─────────────────────────────────────")
+        lines.append("  🖥️ <b>Web Dashboard:</b> <code>http://localhost:8660</code>")
+        lines.append("  🤖 <b>Telegram Bot:</b> <code>@v3n15_bot</code>")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         return "\n".join(lines)
 
