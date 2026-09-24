@@ -147,22 +147,73 @@ class StateStore:
             logger.error(f"Failed to import backup: {e}")
             return False
 
-    # --- Auth Tokens (Telegram-generated session keys) ---
-    def create_auth_token(self, created_by: str = "telegram", ttl_hours: int = 168) -> str:
-        """Create and persist a cryptographically random access token."""
+    # --- Auth Tokens (Telegram-generated session keys & batch access codes) ---
+    def create_auth_token(
+        self,
+        created_by: str = "telegram",
+        ttl_hours: int = 168,
+        prefix: str = "vkm_tg_",
+        notes: Optional[str] = None
+    ) -> str:
+        """Create and persist a cryptographically random access token with an optional prefix."""
         self._load()
-        token = "vkm_tg_" + secrets.token_hex(24)
+        clean_prefix = prefix.strip() if prefix else "vkm_"
+        sep = "" if clean_prefix.endswith(("-", "_", ":", ".")) else "_"
+        token = f"{clean_prefix}{sep}{secrets.token_hex(20)}"
         now = datetime.utcnow()
         expires_at = (now + timedelta(hours=ttl_hours)).isoformat() + "Z"
         self._auth_tokens[token] = {
             "token": token,
+            "prefix": clean_prefix,
             "created_at": now.isoformat() + "Z",
             "expires_at": expires_at,
             "created_by": created_by,
+            "notes": notes or "",
             "active": True
         }
         self.save()
         return token
+
+    def create_batch_auth_tokens(
+        self,
+        prefix: str = "vkm_code",
+        count: int = 5,
+        created_by: str = "batch",
+        ttl_hours: int = 168,
+        notes: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Create and persist a batch of cryptographically random access/pairing codes with a custom prefix."""
+        self._load()
+        now = datetime.utcnow()
+        expires_at = (now + timedelta(hours=ttl_hours)).isoformat() + "Z"
+        created_tokens = []
+
+        clean_prefix = prefix.strip() if prefix else "vkm_code"
+        sep = "" if clean_prefix.endswith(("-", "_", ":", ".")) else "_"
+        count = max(1, min(int(count), 100))
+
+        for i in range(1, count + 1):
+            hex_part = secrets.token_hex(12)
+            if count > 1:
+                token = f"{clean_prefix}{sep}{i:02d}_{hex_part}"
+            else:
+                token = f"{clean_prefix}{sep}{hex_part}"
+
+            meta = {
+                "token": token,
+                "prefix": clean_prefix,
+                "index": i,
+                "created_at": now.isoformat() + "Z",
+                "expires_at": expires_at,
+                "created_by": created_by,
+                "notes": notes or f"Batch of {count} ({clean_prefix})",
+                "active": True
+            }
+            self._auth_tokens[token] = meta
+            created_tokens.append(dict(meta))
+
+        self.save()
+        return created_tokens
 
     def validate_auth_token(self, token: Optional[str]) -> bool:
         """Check if a token is valid, active, and unexpired."""
@@ -208,14 +259,18 @@ class StateStore:
             return True
         return False
 
-    def list_active_tokens(self) -> List[Dict[str, Any]]:
-        """List all valid, unexpired tokens."""
+    def list_active_tokens(self, prefix: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List all valid, unexpired tokens, optionally filtered by prefix."""
         self._load()
         now = datetime.utcnow()
         active = []
         for t, meta in self._auth_tokens.items():
             if not meta.get("active", True):
                 continue
+            if prefix:
+                clean_p = prefix.strip()
+                if not (t.startswith(clean_p) or meta.get("prefix") == clean_p):
+                    continue
             exp = meta.get("expires_at")
             if exp:
                 try:

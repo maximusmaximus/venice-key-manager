@@ -48,6 +48,9 @@
         <button class="btn btn-secondary btn-sm" id="btn-backup-menu">
           💾 State Backup
         </button>
+        <button class="btn btn-secondary btn-sm" id="btn-open-batch-codes">
+          🎟️ Batch Codes
+        </button>
         <button class="btn btn-primary btn-sm" id="btn-open-create-modal">
           ➕ Mint New Key
         </button>
@@ -323,6 +326,12 @@
         </div>
 
         <div class="form-group">
+          <label class="form-label">Batch Count</label>
+          <input type="number" id="create-batch-count" class="form-control" value="1" min="1" max="25" />
+          <p class="form-hint">Set to 2 or more to create a batch of keys with this prefix (e.g. name-01, name-02).</p>
+        </div>
+
+        <div class="form-group">
           <label class="form-label">Category Group</label>
           <select id="create-category" class="form-control">
             <option value="Default">Default</option>
@@ -580,6 +589,167 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" data-close-modal="modal-backup">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: BATCH CODES & KEYS GENERATOR -->
+  <!-- ========================================================================= -->
+  <div id="modal-batch-codes" class="modal-backdrop hidden">
+    <div class="modal-box modal-lg">
+      <div class="modal-header">
+        <h3 class="modal-title">🎟️ Batch Generator (Codes & Keys)</h3>
+        <button class="modal-close" data-close-modal="modal-batch-codes">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="nav-tabs-bar mb-3">
+          <div class="tabs-left">
+            <button class="nav-tab active" id="batch-tab-codes-btn">🎟️ Batch Pairing / Access Codes</button>
+            <button class="nav-tab" id="batch-tab-keys-btn">🔑 Batch Venice API Keys</button>
+          </div>
+        </div>
+
+        <!-- TAB 1: BATCH ACCESS / PAIRING CODES -->
+        <div id="batch-tab-codes-content">
+          <div class="alert-box-info mb-3">
+            Generate multiple access codes with a custom prefix for pairing devices or granting access to the Web Control Plane.
+          </div>
+
+          <div class="form-row">
+            <div class="form-group flex-1">
+              <label class="form-label">Code Prefix <span class="required">*</span></label>
+              <input type="text" id="batch-code-prefix" class="form-control mono" placeholder="e.g. team-, agent-, vip-, vkm_code_" value="vkm_code_" />
+              <p class="form-hint">Prefix added to every generated access code</p>
+            </div>
+            <div class="form-group" style="width: 140px;">
+              <label class="form-label">Count (1-100)</label>
+              <input type="number" id="batch-code-count" class="form-control" value="5" min="1" max="100" />
+            </div>
+            <div class="form-group" style="width: 160px;">
+              <label class="form-label">Validity (Hours)</label>
+              <select id="batch-code-ttl" class="form-control">
+                <option value="24">24 Hours (1d)</option>
+                <option value="72">72 Hours (3d)</option>
+                <option value="168" selected>168 Hours (7d)</option>
+                <option value="720">720 Hours (30d)</option>
+                <option value="2160">2160 Hours (90d)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Tag / Notes (Optional)</label>
+            <input type="text" id="batch-code-notes" class="form-control" placeholder="e.g. Team Alpha provision or Dev workshop" />
+          </div>
+
+          <div class="mb-3">
+            <button class="btn btn-primary" id="btn-submit-batch-codes">🎟️ Generate Batch Codes</button>
+          </div>
+
+          <!-- Generated Results -->
+          <div id="batch-code-results-box" class="hidden mt-3">
+            <div class="flex-between align-center mb-2">
+              <h4 class="text-sm font-semibold text-accent">Newly Generated Codes</h4>
+              <div class="flex gap-2">
+                <button class="btn btn-xs btn-secondary" id="btn-copy-all-batch-codes">📋 Copy All Codes</button>
+                <button class="btn btn-xs btn-secondary" id="btn-copy-all-batch-links">🔗 Copy Magic Links</button>
+                <button class="btn btn-xs btn-outline" id="btn-download-batch-csv">💾 Export CSV</button>
+              </div>
+            </div>
+            <div class="code-box-scroll mono text-xs mb-3" id="batch-codes-output-list"></div>
+          </div>
+
+          <hr class="modal-divider mt-4 mb-3" />
+
+          <!-- Existing Active Codes -->
+          <div class="flex-between align-center mb-2">
+            <h4 class="text-sm font-semibold">Active Access Codes</h4>
+            <button class="btn btn-xs btn-outline" id="btn-refresh-active-codes">🔄 Refresh List</button>
+          </div>
+          <div class="table-responsive" style="max-height: 200px; overflow-y: auto;">
+            <table class="table text-xs" id="table-active-tokens">
+              <thead>
+                <tr>
+                  <th>Prefix</th>
+                  <th>Token / Code</th>
+                  <th>Expires</th>
+                  <th>Notes</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="tbody-active-tokens">
+                <tr><td colspan="5" class="text-center text-dim py-3">Loading active codes...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- TAB 2: BATCH VENICE API KEYS -->
+        <div id="batch-tab-keys-content" class="hidden">
+          <div class="alert-box-info mb-3">
+            Mint multiple Venice.ai API keys with common prefix naming (e.g. <code>worker-01</code>, <code>worker-02</code>), budget caps, and category assignments.
+          </div>
+
+          <div class="form-row">
+            <div class="form-group flex-1">
+              <label class="form-label">Key Name Prefix <span class="required">*</span></label>
+              <input type="text" id="batch-key-prefix" class="form-control" placeholder="e.g. agent-, worker-, fleet-" value="agent-" />
+              <p class="form-hint">Keys will be named prefix-01, prefix-02, ...</p>
+            </div>
+            <div class="form-group" style="width: 140px;">
+              <label class="form-label">Count (1-25)</label>
+              <input type="number" id="batch-key-count" class="form-control" value="3" min="1" max="25" />
+            </div>
+            <div class="form-group" style="width: 160px;">
+              <label class="form-label">Category</label>
+              <select id="batch-key-category" class="form-control">
+                <option value="Agents" selected>Agents</option>
+                <option value="Default">Default</option>
+                <option value="Production">Production</option>
+                <option value="Testing">Testing</option>
+                <option value="Telegram">Telegram</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group flex-1">
+              <label class="form-label">Daily USD Spending Cap</label>
+              <input type="number" step="0.01" min="0" id="batch-key-limit" class="form-control" value="0.50" />
+            </div>
+            <div class="form-group flex-1">
+              <label class="form-label">Reset Period</label>
+              <select id="batch-key-period" class="form-control">
+                <option value="EPOCH" selected>Daily (EPOCH)</option>
+                <option value="MONTH">Monthly (MONTH)</option>
+                <option value="LIFETIME">Lifetime Cap</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <button class="btn btn-primary" id="btn-submit-batch-keys">🔑 Mint Batch Keys</button>
+          </div>
+
+          <!-- Generated Batch Keys Results -->
+          <div id="batch-key-results-box" class="hidden mt-3">
+            <div class="alert-box-success mb-2">
+              <strong>Batch Keys Minted!</strong> Copy all tokens now; Venice does not display them again.
+            </div>
+            <div class="flex-between align-center mb-2">
+              <h4 class="text-sm font-semibold text-accent">Minted Keys</h4>
+              <div class="flex gap-2">
+                <button class="btn btn-xs btn-secondary" id="btn-copy-all-batch-keys">📋 Copy All Keys</button>
+                <button class="btn btn-xs btn-outline" id="btn-copy-batch-keys-env">📜 Copy .env Snippet</button>
+              </div>
+            </div>
+            <div class="code-box-scroll mono text-xs mb-3" id="batch-keys-output-list"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal="modal-batch-codes">Close</button>
       </div>
     </div>
   </div>

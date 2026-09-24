@@ -47,6 +47,15 @@ def main():
     create_p.add_argument("--type", choices=["INFERENCE", "ADMIN"], default="INFERENCE", help="Key type")
     create_p.add_argument("--threshold", type=float, default=None, help="Custom low-balance threshold")
 
+    # 5b. Batch Create Keys
+    create_batch_p = subparsers.add_parser("create-batch", help="Mint a batch of API keys with a common name prefix")
+    create_batch_p.add_argument("--prefix", "-p", required=True, help="Prefix for key names (e.g. worker-, agent-)")
+    create_batch_p.add_argument("--count", "-c", type=int, default=3, help="Number of keys to mint (1-25)")
+    create_batch_p.add_argument("--daily-usd", "-u", type=float, default=0.50, help="Spend cap in USD per key")
+    create_batch_p.add_argument("--category", default="Default", help="Category group")
+    create_batch_p.add_argument("--type", choices=["INFERENCE", "ADMIN"], default="INFERENCE", help="Key type")
+    create_batch_p.add_argument("--period", choices=["EPOCH", "MONTH", "LIFETIME"], default="EPOCH", help="Reset period")
+
     # 6. Cycle Key
     cycle_p = subparsers.add_parser("cycle", help="Rotate/cycle an existing API key")
     cycle_p.add_argument("--id", required=True, help="Key ID to rotate")
@@ -85,15 +94,25 @@ def main():
     p_dash = subparsers.add_parser("dashboard-link", help="Generate Telegram-authenticated magic link and access key")
     p_dash.add_argument("--base-url", default=None, help="Base URL override (defaults to DASHBOARD_BASE_URL)")
     p_dash.add_argument("--user", default="controller_tg", help="User tag")
+    p_dash.add_argument("--prefix", default="vkm_tg_", help="Optional token prefix")
 
     # Auth token management
     p_auth = subparsers.add_parser("auth", help="Manage dashboard access keys")
     auth_sub = p_auth.add_subparsers(dest="auth_action", required=True)
     p_auth_create = auth_sub.add_parser("create-token", help="Generate a new access key")
+    p_auth_create.add_argument("--prefix", default="vkm_code_", help="Prefix for access key")
     p_auth_create.add_argument("--ttl", type=int, default=168, help="Token validity in hours (default: 168)")
     p_auth_create.add_argument("--user", default="cli_admin", help="User tag")
 
-    auth_sub.add_parser("list-tokens", help="List active access tokens")
+    p_auth_batch = auth_sub.add_parser("create-batch", help="Generate a batch of access/pairing codes with a prefix")
+    p_auth_batch.add_argument("--prefix", "-p", default="vkm_code_", help="Prefix for generated codes (e.g. team-, vip-)")
+    p_auth_batch.add_argument("--count", "-c", type=int, default=5, help="Number of codes to generate")
+    p_auth_batch.add_argument("--ttl", type=int, default=168, help="Token validity in hours (default: 168)")
+    p_auth_batch.add_argument("--user", default="cli_admin", help="User tag")
+    p_auth_batch.add_argument("--notes", help="Optional notes or tag")
+
+    p_auth_list = auth_sub.add_parser("list-tokens", help="List active access tokens")
+    p_auth_list.add_argument("--prefix", help="Filter by prefix")
     p_auth_revoke = auth_sub.add_parser("revoke-token", help="Revoke an access token")
     p_auth_revoke.add_argument("token", help="Token string to revoke")
 
@@ -157,6 +176,24 @@ def main():
         print(f"• Spend Limit: {f'${args.daily_usd:.2f}' if args.daily_usd is not None else 'Unlimited'} ({res.limitPeriod})")
         print(f"• API Token:   {res.apiKey}")
         print("\n⚠️ Store this token now. It will never be shown again.\n")
+
+    elif args.command == "create-batch":
+        client = VeniceClient()
+        results = asyncio.run(client.create_batch_keys(
+            prefix=args.prefix,
+            count=args.count,
+            daily_usd=args.daily_usd,
+            category=args.category,
+            api_key_type=args.type,
+            limit_period=args.period,
+        ))
+        print(f"\n🎉 Successfully Minted Batch of {len(results)} Keys (Prefix: '{args.prefix}')")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        for idx, k in enumerate(results, 1):
+            print(f"#{idx:02d} | Name: {k.description:<24} | ID: {k.id}")
+            print(f"     Token: {k.apiKey}")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("⚠️ Store these secret tokens now. They will never be shown again.\n")
 
     elif args.command == "cycle":
         client = VeniceClient()
@@ -237,7 +274,7 @@ def main():
                 print(f"[Telegram] Report dispatched: {'✅ Success' if sent else '❌ Failed'}")
 
     elif args.command == "dashboard-link":
-        token = state_store.create_auth_token(created_by=args.user)
+        token = state_store.create_auth_token(created_by=args.user, prefix=args.prefix)
         base = (args.base_url or config.dashboard_base_url).rstrip("/")
         magic_url = f"{base}/?token={token}"
         print("\n🌐 VENICE CONTROL PLANE — DASHBOARD ACCESS")
@@ -249,10 +286,26 @@ def main():
 
     elif args.command == "auth":
         if args.auth_action == "create-token":
-            t = state_store.create_auth_token(created_by=args.user, ttl_hours=args.ttl)
+            t = state_store.create_auth_token(created_by=args.user, ttl_hours=args.ttl, prefix=args.prefix)
             print(f"✅ Generated access key: {t}")
+        elif args.auth_action == "create-batch":
+            tokens = state_store.create_batch_auth_tokens(
+                prefix=args.prefix,
+                count=args.count,
+                created_by=args.user,
+                ttl_hours=args.ttl,
+                notes=args.notes
+            )
+            base = config.dashboard_base_url.rstrip("/")
+            print(f"\n🎟️ Generated Batch of {len(tokens)} Access Codes (Prefix: '{args.prefix}')")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            for idx, t in enumerate(tokens, 1):
+                magic = f"{base}/?token={t['token']}"
+                print(f"#{idx:02d} | Code: {t['token']}")
+                print(f"     Link: {magic}")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
         elif args.auth_action == "list-tokens":
-            tokens = state_store.list_active_tokens()
+            tokens = state_store.list_active_tokens(prefix=args.prefix)
             print(json.dumps(tokens, indent=2))
         elif args.auth_action == "revoke-token":
             ok = state_store.revoke_auth_token(args.token)

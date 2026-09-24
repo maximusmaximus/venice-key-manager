@@ -218,6 +218,36 @@ class VeniceClient:
 
         return new_key_resp, revoked_old
 
+    async def create_batch_keys(
+        self,
+        prefix: str,
+        count: int = 3,
+        daily_usd: Optional[float] = 0.50,
+        category: str = "Default",
+        api_key_type: str = "INFERENCE",
+        limit_period: str = "EPOCH",
+        custom_threshold: Optional[float] = None,
+    ) -> List[KeyCreatedResponse]:
+        """Create a batch of Venice API keys with formatted descriptions using a prefix."""
+        clean_prefix = prefix.strip() if prefix else "agent"
+        sep = "" if clean_prefix.endswith(("-", "_", ":", ".")) else "-"
+        count = max(1, min(int(count), 25))
+
+        results = []
+        for i in range(1, count + 1):
+            desc = f"{clean_prefix}{sep}{i:02d}" if count > 1 else clean_prefix
+            req = KeyCreateRequest(
+                description=desc,
+                apiKeyType=api_key_type,
+                daily_usd=daily_usd,
+                limitPeriod=limit_period,
+                category=category,
+                custom_threshold=custom_threshold,
+            )
+            res = await self.create_key(req)
+            results.append(res)
+        return results
+
     # =========================================================================
     # 2. Account Rates, Balances, & Models
     # =========================================================================

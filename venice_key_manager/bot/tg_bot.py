@@ -55,8 +55,9 @@ class VeniceTelegramBot:
                 [{"text": "📊 Account & Balance"}, {"text": "🔑 List Keys"}],
                 [{"text": "📋 Daily Keys Report"}, {"text": "⚠️ Low Balance Alert"}],
                 [{"text": "➕ Mint Key"}, {"text": "🔄 Cycle Key"}],
-                [{"text": "⚡ Quick Test"}, {"text": "🔒 E2EE Models"}],
-                [{"text": "🌐 Web Dashboard"}, {"text": "💾 Download Backup"}],
+                [{"text": "🎟️ Batch Codes"}, {"text": "⚡ Quick Test"}],
+                [{"text": "🌐 Web Dashboard"}, {"text": "🔒 E2EE Models"}],
+                [{"text": "💾 Download Backup"}],
             ],
             "resize_keyboard": True,
             "is_persistent": True,
@@ -94,6 +95,8 @@ class VeniceTelegramBot:
             "• ⚠️ <b>/alert</b> — Low balance keys &amp; budget alerts\n"
             "• ➕ <b>/create</b> — Mint dedicated key with budget\n"
             "• 🔄 <b>/cycle</b> — Rotate/replace active key\n"
+            "• 🎟️ <b>/batchcodes</b> [prefix] [count] — Batch web pairing codes\n"
+            "• 📦 <b>/batchkeys</b> [prefix] [count] — Batch Venice API keys\n"
             "• ⚡ <b>/test</b> — Lightweight inference benchmark\n"
             "• 🔒 <b>/models</b> — Confidential E2EE enclave models\n"
             "• 🌐 <b>/dashboard</b> — Web control plane magic link\n"
@@ -413,6 +416,67 @@ class VeniceTelegramBot:
         )
         await self.send_message(chat_id, msg, parse_mode="HTML")
 
+    async def handle_batch_codes(self, chat_id: int, prefix: str = "vkm_code_", count: int = 3):
+        try:
+            tokens = state_store.create_batch_auth_tokens(
+                prefix=prefix,
+                count=count,
+                created_by=f"telegram:{chat_id}",
+                ttl_hours=168,
+                notes=f"Telegram Batch ({prefix})"
+            )
+            base_url = config.dashboard_base_url.rstrip("/")
+            lines = [
+                "🎟️ <b>BATCH ACCESS CODES CREATED</b>",
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                f"🏷️ <b>Prefix:</b> <code>{clean_html(prefix)}</code>",
+                f"🔢 <b>Count:</b> <code>{len(tokens)} codes</code>",
+                f"⏳ <b>Validity:</b> <code>7 Days (168h)</code>",
+                "",
+                "🔑 <b>GENERATED CODES &amp; MAGIC LINKS</b>",
+                "─────────────────────────────────────",
+            ]
+            for idx, item in enumerate(tokens, 1):
+                tok = item["token"]
+                url = f"{base_url}/?token={tok}"
+                lines.append(f"<b>Code #{idx}:</b> <code>{clean_html(tok)}</code>")
+                lines.append(f"🔗 <a href=\"{url}\">Single-Click Magic Link #{idx}</a>\n")
+
+            lines.append("💡 <i>Recipients can open the link directly or paste the code on the web lock screen.</i>")
+            lines.append(f"ℹ️ <i>To generate more with a custom prefix:</i> <code>/batchcodes &lt;prefix&gt; [count]</code>")
+            lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            await self.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
+        except Exception as e:
+            await self.send_message(chat_id, f"❌ Failed to generate batch codes: {clean_html(e)}")
+
+    async def handle_batch_keys(self, chat_id: int, prefix: str = "agent-", count: int = 3, daily_usd: float = 0.50):
+        try:
+            keys = await self.client.create_batch_keys(
+                prefix=prefix,
+                count=count,
+                daily_usd=daily_usd,
+                category="Agents",
+            )
+            lines = [
+                "🔑 <b>BATCH VENICE API KEYS MINTED</b>",
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                f"🏷️ <b>Prefix:</b> <code>{clean_html(prefix)}</code>",
+                f"🔢 <b>Count:</b> <code>{len(keys)} keys</code>",
+                f"💵 <b>Budget Cap:</b> <code>${daily_usd:.2f}/day each</code>",
+                "",
+                "⚠️ <b>SECRET KEYS (SHOWN ONLY ONCE)</b>",
+                "─────────────────────────────────────",
+            ]
+            for idx, k in enumerate(keys, 1):
+                lines.append(f"<b>#{idx} — {clean_html(k.description)}:</b>")
+                lines.append(f"<code>{clean_html(k.apiKey)}</code>")
+                lines.append(f"ID: <code>{clean_html(k.id)}</code>\n")
+
+            lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            await self.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
+        except Exception as e:
+            await self.send_message(chat_id, f"❌ Failed to mint batch keys: {clean_html(e)}")
+
     # =========================================================================
     # Polling Loop
     # =========================================================================
@@ -493,6 +557,19 @@ class VeniceTelegramBot:
                 elif text in ("/backup", "💾 Download Backup"):
                     backup = state_store.export_backup()
                     await self.send_message(chat_id, f"💾 *Backup JSON:*\n```json\n{backup.model_dump_json(indent=2)}\n```")
+                elif text in ("/batchcodes", "🎟️ Batch Codes"):
+                    await self.handle_batch_codes(chat_id, prefix="vkm_code_", count=3)
+                elif text.startswith(("/batchcodes ", "/batchcode ", "/batch ")):
+                    parts = text.split()
+                    pfx = parts[1] if len(parts) > 1 else "vkm_code_"
+                    cnt = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 3
+                    await self.handle_batch_codes(chat_id, prefix=pfx, count=cnt)
+                elif text.startswith(("/batchkeys ", "/batchkey ")):
+                    parts = text.split()
+                    pfx = parts[1] if len(parts) > 1 else "agent-"
+                    cnt = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 3
+                    usd = float(parts[3]) if len(parts) > 3 else 0.50
+                    await self.handle_batch_keys(chat_id, prefix=pfx, count=cnt, daily_usd=usd)
                 elif text.startswith("/create "):
                     parts = text.split()
                     name = parts[1]

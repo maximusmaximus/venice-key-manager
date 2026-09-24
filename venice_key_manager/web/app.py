@@ -28,6 +28,10 @@ from ..models import (
     KeyUpdateRequest,
     KeyCycleRequest,
     InferenceTestRequest,
+    BatchAuthTokenCreateRequest,
+    BatchAuthTokenResponse,
+    BatchKeyCreateRequest,
+    BatchKeyCreateResponse,
 )
 from ..state import state_store
 
@@ -179,6 +183,53 @@ async def logout(response: Response):
     return {"success": True}
 
 
+@app.post("/api/auth/tokens/batch", dependencies=[Depends(require_auth)])
+async def create_batch_tokens_endpoint(req: BatchAuthTokenCreateRequest, request: Request):
+    """Create a batch of access/pairing codes with a custom prefix."""
+    try:
+        tokens = state_store.create_batch_auth_tokens(
+            prefix=req.prefix,
+            count=req.count,
+            created_by="web_admin",
+            ttl_hours=req.ttl_hours,
+            notes=req.notes,
+        )
+        base_url = str(request.base_url).rstrip("/")
+        for t in tokens:
+            t["magic_url"] = f"{base_url}/?token={t['token']}"
+        return {
+            "success": True,
+            "count": len(tokens),
+            "prefix": req.prefix,
+            "tokens": tokens,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/auth/tokens", dependencies=[Depends(require_auth)])
+async def list_auth_tokens_endpoint(prefix: Optional[str] = Query(None), request: Request = None):
+    """List active access/pairing tokens, optionally filtered by prefix."""
+    try:
+        tokens = state_store.list_active_tokens(prefix=prefix)
+        base_url = str(request.base_url).rstrip("/") if request else ""
+        for t in tokens:
+            t["magic_url"] = f"{base_url}/?token={t['token']}" if base_url else f"/?token={t['token']}"
+        return tokens
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/auth/tokens/{token_str}", dependencies=[Depends(require_auth)])
+async def revoke_auth_token_endpoint(token_str: str):
+    """Revoke an active access/pairing code."""
+    try:
+        ok = state_store.revoke_auth_token(token_str)
+        return {"success": ok, "token": token_str}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok", "app": "venice-key-manager", "version": "1.0.0"}
@@ -224,6 +275,29 @@ async def create_key(req: KeyCreateRequest):
     try:
         res = await client.create_key(req)
         return res.model_dump()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/keys/batch", dependencies=[Depends(require_auth)])
+async def create_batch_keys_endpoint(req: BatchKeyCreateRequest):
+    """Create a batch of Venice API keys with a common name/description prefix."""
+    try:
+        results = await client.create_batch_keys(
+            prefix=req.prefix,
+            count=req.count,
+            daily_usd=req.daily_usd,
+            category=req.category,
+            api_key_type=req.apiKeyType,
+            limit_period=req.limitPeriod,
+            custom_threshold=req.custom_threshold,
+        )
+        return {
+            "success": True,
+            "count": len(results),
+            "prefix": req.prefix,
+            "keys": [r.model_dump() for r in results],
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

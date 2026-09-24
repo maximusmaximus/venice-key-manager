@@ -564,12 +564,118 @@ function initModals() {
     document.getElementById("create-desc").value = "";
     document.getElementById("create-limit-usd").value = "0.50";
     document.getElementById("create-custom-threshold").value = "";
+    const bCountInput = document.getElementById("create-batch-count");
+    if (bCountInput) bCountInput.value = "1";
     document.getElementById("modal-create-key").classList.remove("hidden");
   });
 
   document.getElementById("btn-submit-create-key").addEventListener("click", handleCreateKey);
   document.getElementById("btn-submit-cycle-key").addEventListener("click", handleCycleKey);
   document.getElementById("btn-submit-edit-key").addEventListener("click", handleEditKey);
+
+  // Batch Codes & Keys Modal Wiring
+  const btnOpenBatch = document.getElementById("btn-open-batch-codes");
+  if (btnOpenBatch) {
+    btnOpenBatch.addEventListener("click", () => {
+      document.getElementById("modal-batch-codes").classList.remove("hidden");
+      loadActiveTokens();
+    });
+  }
+
+  const tabCodesBtn = document.getElementById("batch-tab-codes-btn");
+  const tabKeysBtn = document.getElementById("batch-tab-keys-btn");
+  const tabCodesContent = document.getElementById("batch-tab-codes-content");
+  const tabKeysContent = document.getElementById("batch-tab-keys-content");
+
+  if (tabCodesBtn && tabKeysBtn) {
+    tabCodesBtn.addEventListener("click", () => {
+      tabCodesBtn.classList.add("active");
+      tabKeysBtn.classList.remove("active");
+      tabCodesContent.classList.remove("hidden");
+      tabKeysContent.classList.add("hidden");
+    });
+    tabKeysBtn.addEventListener("click", () => {
+      tabKeysBtn.classList.add("active");
+      tabCodesBtn.classList.remove("active");
+      tabKeysContent.classList.remove("hidden");
+      tabCodesContent.classList.add("hidden");
+    });
+  }
+
+  const btnSubmitBatchCodes = document.getElementById("btn-submit-batch-codes");
+  if (btnSubmitBatchCodes) {
+    btnSubmitBatchCodes.addEventListener("click", handleBatchCodesGenerate);
+  }
+
+  const btnSubmitBatchKeys = document.getElementById("btn-submit-batch-keys");
+  if (btnSubmitBatchKeys) {
+    btnSubmitBatchKeys.addEventListener("click", handleBatchKeysMint);
+  }
+
+  const btnRefreshActiveCodes = document.getElementById("btn-refresh-active-codes");
+  if (btnRefreshActiveCodes) {
+    btnRefreshActiveCodes.addEventListener("click", loadActiveTokens);
+  }
+
+  // Copy and Export buttons for Batch Codes
+  const btnCopyCodes = document.getElementById("btn-copy-all-batch-codes");
+  if (btnCopyCodes) {
+    btnCopyCodes.addEventListener("click", () => {
+      if (!currentBatchCodes || !currentBatchCodes.length) return;
+      const text = currentBatchCodes.map(c => c.token).join("\n");
+      navigator.clipboard.writeText(text);
+      showToast(`Copied ${currentBatchCodes.length} codes to clipboard!`, "success");
+    });
+  }
+
+  const btnCopyLinks = document.getElementById("btn-copy-all-batch-links");
+  if (btnCopyLinks) {
+    btnCopyLinks.addEventListener("click", () => {
+      if (!currentBatchCodes || !currentBatchCodes.length) return;
+      const text = currentBatchCodes.map(c => c.magic_url).join("\n");
+      navigator.clipboard.writeText(text);
+      showToast(`Copied ${currentBatchCodes.length} magic links to clipboard!`, "success");
+    });
+  }
+
+  const btnDownloadCsv = document.getElementById("btn-download-batch-csv");
+  if (btnDownloadCsv) {
+    btnDownloadCsv.addEventListener("click", () => {
+      if (!currentBatchCodes || !currentBatchCodes.length) return;
+      let csv = "Token,Prefix,ExpiresAt,MagicUrl\n";
+      currentBatchCodes.forEach(c => {
+        csv += `"${c.token}","${c.prefix || ''}","${c.expires_at || ''}","${c.magic_url || ''}"\n`;
+      });
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `venice-batch-codes-${Date.now()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast("Batch codes CSV downloaded!", "success");
+    });
+  }
+
+  const btnCopyKeys = document.getElementById("btn-copy-all-batch-keys");
+  if (btnCopyKeys) {
+    btnCopyKeys.addEventListener("click", () => {
+      if (!currentBatchKeys || !currentBatchKeys.length) return;
+      const text = currentBatchKeys.map(k => `${k.description}: ${k.apiKey}`).join("\n");
+      navigator.clipboard.writeText(text);
+      showToast(`Copied ${currentBatchKeys.length} API keys to clipboard!`, "success");
+    });
+  }
+
+  const btnCopyEnv = document.getElementById("btn-copy-batch-keys-env");
+  if (btnCopyEnv) {
+    btnCopyEnv.addEventListener("click", () => {
+      if (!currentBatchKeys || !currentBatchKeys.length) return;
+      const text = currentBatchKeys.map((k, i) => `export VENICE_KEY_${i + 1}="${k.apiKey}" # ${k.description}`).join("\n");
+      navigator.clipboard.writeText(text);
+      showToast("Copied .env format to clipboard!", "success");
+    });
+  }
 }
 
 function initPresets() {
@@ -583,10 +689,14 @@ function initPresets() {
   });
 }
 
+// Global batch state for UI copy actions
+let currentBatchCodes = [];
+let currentBatchKeys = [];
+
 async function handleCreateKey() {
   const desc = document.getElementById("create-desc").value.trim();
   if (!desc) {
-    showToast("Please enter a description or agent name", "error");
+    showToast("Please enter a description or agent name prefix", "error");
     return;
   }
 
@@ -595,6 +705,48 @@ async function handleCreateKey() {
   const limitVal = document.getElementById("create-limit-usd").value;
   const customThreshVal = document.getElementById("create-custom-threshold").value;
   const keyType = document.getElementById("create-type").value;
+  const batchCount = parseInt(document.getElementById("create-batch-count")?.value || "1", 10);
+
+  // If user entered batch count > 1, execute batch creation
+  if (batchCount > 1) {
+    const batchPayload = {
+      prefix: desc,
+      count: batchCount,
+      daily_usd: limitVal !== "" ? parseFloat(limitVal) : null,
+      limitPeriod: period,
+      category: category,
+      apiKeyType: keyType,
+      custom_threshold: customThreshVal !== "" ? parseFloat(customThreshVal) : null
+    };
+
+    try {
+      const res = await authFetch("/api/keys/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(batchPayload)
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Batch key creation failed");
+      }
+      const data = await res.json();
+      document.getElementById("modal-create-key").classList.add("hidden");
+
+      // Show revealed modal with first key or summary
+      const first = data.keys[0];
+      document.getElementById("revealed-key-token").value = first.apiKey;
+      document.getElementById("revealed-key-id").value = `${data.count} Keys Minted (e.g. ${first.id})`;
+      const envSnippet = data.keys.map((k, i) => `export VENICE_KEY_${i + 1}="${k.apiKey}" # ${k.description}`).join("\n");
+      document.getElementById("revealed-curl").innerText = envSnippet;
+      document.getElementById("modal-key-revealed").classList.remove("hidden");
+
+      showToast(`Batch of ${data.count} keys minted successfully!`, "success");
+      loadKeys();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+    return;
+  }
 
   const payload = {
     description: desc,
@@ -632,6 +784,170 @@ async function handleCreateKey() {
     loadKeys();
   } catch (err) {
     showToast(err.message, "error");
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Batch Access Codes & Batch Keys Helpers
+// -----------------------------------------------------------------------------
+async function handleBatchCodesGenerate() {
+  const pfx = document.getElementById("batch-code-prefix").value.trim() || "vkm_code_";
+  const cnt = parseInt(document.getElementById("batch-code-count").value || "5", 10);
+  const ttl = parseInt(document.getElementById("batch-code-ttl").value || "168", 10);
+  const notes = document.getElementById("batch-code-notes").value.trim();
+
+  const btn = document.getElementById("btn-submit-batch-codes");
+  btn.disabled = true;
+  btn.innerText = "Generating Codes...";
+
+  try {
+    const res = await authFetch("/api/auth/tokens/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prefix: pfx,
+        count: cnt,
+        ttl_hours: ttl,
+        notes: notes
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Failed to generate batch codes");
+    }
+    const data = await res.json();
+    currentBatchCodes = data.tokens || [];
+
+    // Render generated codes
+    const resultsBox = document.getElementById("batch-code-results-box");
+    const outList = document.getElementById("batch-codes-output-list");
+    resultsBox.classList.remove("hidden");
+
+    outList.innerHTML = currentBatchCodes.map((item, idx) => `
+      <div class="batch-item-row" style="padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.06); display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <span class="text-accent font-bold">#${idx + 1}</span>
+          <span class="mono text-white ml-2">${escapeHtml(item.token)}</span>
+          <div class="text-xs text-dim">
+            <a href="${escapeHtml(item.magic_url)}" target="_blank" class="text-accent">🔗 Magic Link</a>
+            · Expires: ${formatDate(item.expires_at)}
+          </div>
+        </div>
+        <button class="btn btn-xs btn-outline copy-btn" data-copy-text="${escapeHtml(item.token)}">📋 Copy</button>
+      </div>
+    `).join("");
+
+    showToast(`Successfully created ${data.count} codes with prefix "${pfx}"!`, "success");
+    loadActiveTokens();
+  } catch (err) {
+    showToast(err.message, "error");
+  } finally {
+    btn.disabled = false;
+    btn.innerText = "🎟️ Generate Batch Codes";
+  }
+}
+
+async function loadActiveTokens() {
+  const tbody = document.getElementById("tbody-active-tokens");
+  if (!tbody) return;
+
+  try {
+    const res = await authFetch("/api/auth/tokens");
+    if (!res.ok) throw new Error("Failed to load active tokens");
+    const tokens = await res.json();
+
+    if (!tokens.length) {
+      tbody.innerHTML = `<tr><td colspan="5" class="text-center text-dim py-3">No active access codes found.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = tokens.map(t => `
+      <tr>
+        <td><span class="chip chip-category text-xs">${escapeHtml(t.prefix || 'custom')}</span></td>
+        <td>
+          <div class="mono text-xs text-white">${escapeHtml(t.token)}</div>
+          <div class="text-xs text-dim"><a href="${escapeHtml(t.magic_url)}" target="_blank" class="text-accent">Open Link</a></div>
+        </td>
+        <td class="text-xs text-dim">${formatDate(t.expires_at)}</td>
+        <td class="text-xs text-dim">${escapeHtml(t.notes || t.created_by || '--')}</td>
+        <td>
+          <button class="btn btn-xs btn-danger" onclick="revokeAuthToken('${escapeHtml(t.token)}')">Revoke</button>
+        </td>
+      </tr>
+    `).join("");
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="text-center text-warning py-3">Failed to load codes: ${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+async function revokeAuthToken(tokenStr) {
+  if (!confirm(`Revoke access code "${tokenStr}"? Devices using this code will be locked out.`)) return;
+  try {
+    const res = await authFetch(`/api/auth/tokens/${encodeURIComponent(tokenStr)}`, {
+      method: "DELETE"
+    });
+    if (!res.ok) throw new Error("Failed to revoke token");
+    showToast("Access code revoked successfully", "success");
+    loadActiveTokens();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+async function handleBatchKeysMint() {
+  const pfx = document.getElementById("batch-key-prefix").value.trim() || "agent-";
+  const cnt = parseInt(document.getElementById("batch-key-count").value || "3", 10);
+  const cat = document.getElementById("batch-key-category").value;
+  const limitVal = document.getElementById("batch-key-limit").value;
+  const period = document.getElementById("batch-key-period").value;
+
+  const btn = document.getElementById("btn-submit-batch-keys");
+  btn.disabled = true;
+  btn.innerText = "Minting Keys on Venice...";
+
+  try {
+    const res = await authFetch("/api/keys/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prefix: pfx,
+        count: cnt,
+        category: cat,
+        daily_usd: limitVal !== "" ? parseFloat(limitVal) : 0.50,
+        limitPeriod: period,
+        apiKeyType: "INFERENCE"
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Failed to mint batch keys");
+    }
+    const data = await res.json();
+    currentBatchKeys = data.keys || [];
+
+    const resultsBox = document.getElementById("batch-key-results-box");
+    const outList = document.getElementById("batch-keys-output-list");
+    resultsBox.classList.remove("hidden");
+
+    outList.innerHTML = currentBatchKeys.map((k, idx) => `
+      <div class="batch-item-row" style="padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.06); display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <span class="text-accent font-bold">#${idx + 1}</span>
+          <span class="font-semibold text-white ml-2">${escapeHtml(k.description)}</span>
+          <span class="text-xs text-dim ml-2">(ID: ${k.id})</span>
+          <div class="mono text-xs text-white mt-1">${escapeHtml(k.apiKey)}</div>
+        </div>
+        <button class="btn btn-xs btn-outline copy-btn" data-copy-text="${escapeHtml(k.apiKey)}">📋 Copy</button>
+      </div>
+    `).join("");
+
+    showToast(`Successfully minted ${data.count} Venice API keys!`, "success");
+    loadKeys();
+  } catch (err) {
+    showToast(err.message, "error");
+  } finally {
+    btn.disabled = false;
+    btn.innerText = "🔑 Mint Batch Keys";
   }
 }
 

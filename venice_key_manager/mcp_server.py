@@ -162,6 +162,86 @@ class VeniceMCPServer:
                         }
                     }
                 }
+            },
+            {
+                "name": "venice_create_batch_codes",
+                "description": "Create a batch of cryptographically random access/pairing codes with a custom prefix for web dashboard pairing.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "prefix": {
+                            "type": "string",
+                            "default": "vkm_code_",
+                            "description": "Prefix for generated codes (e.g. 'team-', 'vip-', 'agent-')"
+                        },
+                        "count": {
+                            "type": "integer",
+                            "default": 5,
+                            "description": "Number of codes to generate (1 to 100)"
+                        },
+                        "ttl_hours": {
+                            "type": "integer",
+                            "default": 168,
+                            "description": "Code validity in hours (default: 168, 7 days)"
+                        },
+                        "notes": {
+                            "type": "string",
+                            "description": "Optional notes or tag for this batch"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "venice_create_batch_keys",
+                "description": "Create a batch of Venice.ai API keys with common prefix in descriptions, budget limits, and category.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "prefix": {
+                            "type": "string",
+                            "description": "Prefix for key descriptions (e.g. 'worker-', 'agent-')"
+                        },
+                        "count": {
+                            "type": "integer",
+                            "default": 3,
+                            "description": "Number of keys to mint (1 to 25)"
+                        },
+                        "daily_usd": {
+                            "type": "number",
+                            "default": 0.50,
+                            "description": "Daily spend cap in USD for each key"
+                        },
+                        "category": {
+                            "type": "string",
+                            "default": "Default",
+                            "description": "Category group"
+                        },
+                        "api_key_type": {
+                            "type": "string",
+                            "enum": ["INFERENCE", "ADMIN"],
+                            "default": "INFERENCE"
+                        },
+                        "limit_period": {
+                            "type": "string",
+                            "enum": ["EPOCH", "MONTH", "LIFETIME"],
+                            "default": "EPOCH"
+                        }
+                    },
+                    "required": ["prefix"]
+                }
+            },
+            {
+                "name": "venice_list_auth_tokens",
+                "description": "List active dashboard access/pairing codes with creation date, expiry, and prefix filter.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "prefix": {
+                            "type": "string",
+                            "description": "Optional prefix filter"
+                        }
+                    }
+                }
             }
         ]
 
@@ -266,6 +346,58 @@ class VeniceMCPServer:
                     "metrics": data,
                     "sent_to_telegram": sent_tg
                 }, indent=2)
+
+            elif name == "venice_create_batch_codes":
+                prefix = args.get("prefix", "vkm_code_")
+                count = int(args.get("count", 5))
+                ttl = int(args.get("ttl_hours", 168))
+                notes = args.get("notes")
+                tokens = state_store.create_batch_auth_tokens(
+                    prefix=prefix,
+                    count=count,
+                    created_by="mcp_server",
+                    ttl_hours=ttl,
+                    notes=notes,
+                )
+                base_url = "http://localhost:8660"
+                for t in tokens:
+                    t["magic_url"] = f"{base_url}/?token={t['token']}"
+                return json.dumps({
+                    "status": "success",
+                    "count": len(tokens),
+                    "prefix": prefix,
+                    "tokens": tokens
+                }, indent=2)
+
+            elif name == "venice_create_batch_keys":
+                prefix = args["prefix"]
+                count = int(args.get("count", 3))
+                daily_usd = args.get("daily_usd", 0.50)
+                category = args.get("category", "Default")
+                key_type = args.get("api_key_type", "INFERENCE")
+                limit_period = args.get("limit_period", "EPOCH")
+                keys = await self.client.create_batch_keys(
+                    prefix=prefix,
+                    count=count,
+                    daily_usd=daily_usd,
+                    category=category,
+                    api_key_type=key_type,
+                    limit_period=limit_period,
+                )
+                return json.dumps({
+                    "status": "success",
+                    "count": len(keys),
+                    "prefix": prefix,
+                    "keys": [k.model_dump() for k in keys]
+                }, indent=2)
+
+            elif name == "venice_list_auth_tokens":
+                prefix = args.get("prefix")
+                tokens = state_store.list_active_tokens(prefix=prefix)
+                base_url = "http://localhost:8660"
+                for t in tokens:
+                    t["magic_url"] = f"{base_url}/?token={t['token']}"
+                return json.dumps({"total": len(tokens), "tokens": tokens}, indent=2)
 
             else:
                 return json.dumps({"error": f"Unknown tool: {name}"})

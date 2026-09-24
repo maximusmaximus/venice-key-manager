@@ -1042,3 +1042,31 @@ body.dark-theme {
   font-size: 11px;
   color: var(--text-dim);
 }
+
+/* ========================================================================= */
+/* BATCH MODAL STYLES */
+/* ========================================================================= */
+.code-box-scroll {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.form-row {
+  display: flex;
+  gap: 12px;
+}
+
+.flex-1 {
+  flex: 1;
+}
+
+.modal-divider {
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  margin: 16px 0;
+}
+

@@ -164,3 +164,39 @@ class BackupExport(BaseModel):
     categories: List[str] = Field(default_factory=lambda: ["Default", "Production", "Agents", "Testing", "Telegram"])
     key_metadata: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     summary: Dict[str, Any] = Field(default_factory=dict)
+
+
+# =============================================================================
+# Batch Operations Models
+# =============================================================================
+
+class BatchAuthTokenCreateRequest(BaseModel):
+    prefix: str = "vkm_code_"
+    count: int = 5
+    ttl_hours: int = 168
+    notes: Optional[str] = None
+
+
+class BatchAuthTokenResponse(BaseModel):
+    success: bool = True
+    count: int
+    prefix: str
+    tokens: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class BatchKeyCreateRequest(BaseModel):
+    prefix: str = "agent-"
+    count: int = 3
+    daily_usd: Optional[float] = 0.50
+    limitPeriod: str = "EPOCH"  # "EPOCH" | "MONTH" | "LIFETIME"
+    category: str = "Default"
+    apiKeyType: str = "INFERENCE"  # "INFERENCE" | "ADMIN"
+    custom_threshold: Optional[float] = None
+
+
+class BatchKeyCreateResponse(BaseModel):
+    success: bool = True
+    count: int
+    prefix: str
+    keys: List[KeyCreatedResponse] = Field(default_factory=list)
+
