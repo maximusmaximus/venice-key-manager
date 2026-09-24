@@ -12,6 +12,7 @@ from .models import (
     InferenceTestRequest,
 )
 from .state import state_store
+from .report import DailyKeyReport
 
 logger = logging.getLogger("venice_mcp")
 
@@ -143,6 +144,24 @@ class VeniceMCPServer:
                     "type": "object",
                     "properties": {}
                 }
+            },
+            {
+                "name": "venice_daily_report",
+                "description": "Generate a comprehensive daily report of Venice key usage, spending metrics (current period & 7-day trailing), category breakdowns, top consumers, and low-balance warnings. Optionally dispatch directly to Telegram.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "send_telegram": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Whether to send the generated report directly to configured Telegram chat"
+                        },
+                        "chat_id": {
+                            "type": "string",
+                            "description": "Optional Telegram chat ID override (defaults to configured allowed chat)"
+                        }
+                    }
+                }
             }
         ]
 
@@ -234,6 +253,19 @@ class VeniceMCPServer:
             elif name == "venice_export_backup":
                 backup = state_store.export_backup()
                 return json.dumps(backup.model_dump(), indent=2)
+
+            elif name == "venice_daily_report":
+                reporter = DailyKeyReport(client=self.client)
+                data = await reporter.generate_report_data()
+                formatted_md = reporter.format_markdown(data)
+                sent_tg = False
+                if args.get("send_telegram", False):
+                    sent_tg = await reporter.send_to_telegram(chat_id=args.get("chat_id"))
+                return json.dumps({
+                    "markdown": formatted_md,
+                    "metrics": data,
+                    "sent_to_telegram": sent_tg
+                }, indent=2)
 
             else:
                 return json.dumps({"error": f"Unknown tool: {name}"})

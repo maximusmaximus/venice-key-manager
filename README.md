@@ -17,8 +17,9 @@ Built directly against the official Venice.ai REST API specifications, Venice Ke
   * `EPOCH` (resets daily at 00:00 UTC)
   * `MONTH` (resets monthly on the 1st)
   * `LIFETIME` (permanent spending limit)
-* **Full Model Context Protocol (MCP) Server**: Exposes 9+ specialized MCP tools and resources for Cursor, Claude Desktop, Antigravity, and autonomous agent frameworks.
-* **Reactive Web Dashboard (Port 8660)**: Dark-mode terminal/obsidian dashboard with real-time KPI metrics, countdown timers, search filters, and live Server-Sent Events (SSE).
+* **Daily Key Operations & Spend Reports**: Automated and on-demand telemetry reports aggregating daily spend, 7-day trailing spend, category breakdowns, top spenders, and nearing-ceiling warnings. Deliverable via CLI, Web UI, MCP, or Telegram.
+* **Full Model Context Protocol (MCP) Server**: Exposes 10 specialized MCP tools and resources for Cursor, Claude Desktop, Antigravity, and autonomous agent frameworks.
+* **Reactive Web Dashboard (Port 8660)**: Dark-mode terminal/obsidian dashboard with real-time KPI metrics, countdown timers, search filters, modal report views, and live Server-Sent Events (SSE).
 * **Ubiquitous Copy Buttons**: 1-click clipboard copy buttons wherever a key, ID, masked token, cURL snippet, or JSON payload is displayed.
 * **1-Click Key Cycling / Rotation**: Automatically mints a replacement key inheriting identical limits, periods, and categories while cleanly revoking deprecated keys.
 * **Low-USD Inference Warning System**:
@@ -27,7 +28,7 @@ Built directly against the official Venice.ai REST API specifications, Venice Ke
   * Prominent alert banners, table warning badges, and Telegram alerts.
 * **Key Grouping & Categories**: Organize keys into logical categories (`Agents`, `Production`, `Testing`, `Telegram`, `Research`, or custom tags).
 * **Downloadable State & Settings Backup**: 1-click JSON backup export and import for disaster recovery and multi-instance synchronization.
-* **Interactive Telegram Bot**: Touch controls with persistent reply keyboards, inline key-rotation buttons, spend checks, and light inference benchmarks.
+* **Full Kitchen-Sink Telegram Touch Bot**: Complete 10-button touch grid with persistent reply keyboard, inline rotation selectors, daily report dispatch, balance warnings, and light inference benchmarks.
 * **Inference Playground & Health Probes**: Run instantaneous lightweight completions to measure token count, cost estimation, and API latency.
 
 ---
@@ -145,6 +146,7 @@ Add to your `claude_desktop_config.json` or Cursor MCP settings:
 | `venice_list_models` | Queries 120+ models with filters for confidential E2EE enclaves |
 | `venice_test_inference` | Runs a latency and health benchmark test |
 | `venice_export_backup` | Exports complete JSON backup of categories and settings |
+| `venice_daily_report` | Aggregates daily usage, 7d spend, top consumers, and low-balance warnings |
 
 ---
 
@@ -160,13 +162,17 @@ Add to your `claude_desktop_config.json` or Cursor MCP settings:
    ```bash
    venice-key-manager bot
    ```
-4. In Telegram, interact using the persistent reply keyboard:
+4. In Telegram, interact using the kitchen-sink persistent touch keyboard:
    * `📊 Account & Balance` — Instant account funds & access health check.
    * `🔑 List Keys` — Card overview of keys, current period spend, and limits.
-   * `➕ Mint Key` — Step-by-step interactive key creation with budget presets (\$0.50, \$1.00, \$2.00, \$5.00).
-   * `🔄 Cycle Key` — Inline rotation selector.
+   * `📋 Daily Keys Report` — Real-time telemetry report of spend, categories, and top consumers.
+   * `⚠️ Low Balance Alert` — Instant audit of keys approaching exhaustion or low account balance.
+   * `➕ Mint Key` — Step-by-step interactive key creation with budget presets ($0.50, $1.00, $2.00, $5.00).
+   * `🔄 Cycle Key` — Inline rotation selector to retire old keys and mint replacements.
    * `⚡ Quick Test` — Benchmark latency against Venice `deepseek-v4-flash`.
    * `🔒 E2EE Models` — Catalog of confidential hardware enclave models.
+   * `🌐 Web Dashboard` — Quick link to the web control plane.
+   * `💾 Download Backup` — Instant JSON backup payload of all categories and settings.
 
 ---
 
@@ -175,6 +181,11 @@ Add to your `claude_desktop_config.json` or Cursor MCP settings:
 ```bash
 # Check account balance and limits
 venice-key-manager balance
+
+# Generate daily key usage and spending report
+venice-key-manager report
+# Dispatch report directly to Telegram
+venice-key-manager report --send-tg --chat <chat_id>
 
 # List keys (with category filter or low-balance filter)
 venice-key-manager list --category Agents

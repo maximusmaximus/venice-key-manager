@@ -11,6 +11,7 @@ from ..models import (
     InferenceTestRequest,
 )
 from ..state import state_store
+from ..report import DailyKeyReport
 
 logger = logging.getLogger("venice_tg_bot")
 
@@ -41,15 +42,17 @@ class VeniceTelegramBot:
         return user_id in self.allowed_users
 
     # =========================================================================
-    # Keyboard Builders
+    # Keyboard Builders (Kitchen Sink Style)
     # =========================================================================
 
     def _main_reply_keyboard(self) -> Dict[str, Any]:
         return {
             "keyboard": [
                 [{"text": "📊 Account & Balance"}, {"text": "🔑 List Keys"}],
+                [{"text": "📋 Daily Keys Report"}, {"text": "⚠️ Low Balance Alert"}],
                 [{"text": "➕ Mint Key"}, {"text": "🔄 Cycle Key"}],
                 [{"text": "⚡ Quick Test"}, {"text": "🔒 E2EE Models"}],
+                [{"text": "🌐 Web Dashboard"}, {"text": "💾 Download Backup"}],
             ],
             "resize_keyboard": True,
             "is_persistent": True,
@@ -280,6 +283,52 @@ class VeniceTelegramBot:
 
         await self.send_message(chat_id, msg)
 
+    async def handle_daily_report(self, chat_id: int):
+        await self.send_message(chat_id, "⏳ Generating real-time Venice keys operations report...")
+        reporter = DailyKeyReport(client=self.client)
+        data = await reporter.generate_report_data()
+        msg = reporter.format_markdown(data)
+        await self.send_message(chat_id, msg)
+
+    async def handle_low_balance_alert(self, chat_id: int):
+        rates = await self.client.get_rate_limits()
+        keys = await self.client.list_keys()
+        thresh = state_store.get_global_threshold()
+        low_keys = [k for k in keys if k.is_low_balance]
+        acc_low = rates.balances.USD <= thresh
+
+        if not acc_low and not low_keys:
+            await self.send_message(
+                chat_id,
+                f"✅ *All Balances Healthy!*\n\n"
+                f"• Master USD: `${rates.balances.USD:.4f}` (Threshold: `${thresh:.2f}`)\n"
+                f"• All `{len(keys)}` active keys have sufficient remaining budget."
+            )
+            return
+
+        lines = ["⚠️ *VENICE LOW BALANCE WARNINGS*", "━━━━━━━━━━━━━━━━━━"]
+        if acc_low:
+            lines.append(f"• 🚨 *Master Account:* `${rates.balances.USD:.4f}` USD remaining (Under `${thresh:.2f}`)")
+        for k in low_keys:
+            rem = f"${k.remaining_usd:.4f}" if k.remaining_usd is not None else "--"
+            lim = f"${k.consumptionLimits.usd:.2f}" if k.consumptionLimits else "--"
+            lines.append(f"• ⚠️ `{k.description or k.id}`: `{rem}` left / `{lim}` budget [{k.category}]")
+
+        lines.append("\nTop up your balance on Venice or rotate/cycle saturated keys.")
+        await self.send_message(chat_id, "\n".join(lines))
+
+    async def handle_dashboard_link(self, chat_id: int):
+        msg = (
+            "🌐 *Venice Key Manager Control Plane*\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "Dashboard URL: `http://localhost:8660`\n\n"
+            "• Live SSE spending graphs & epoch countdowns\n"
+            "• Category grouping & per-key alert thresholds\n"
+            "• 1-Click key rotation & clipboard copying\n"
+            "• Downloadable settings & state backups"
+        )
+        await self.send_message(chat_id, msg)
+
     # =========================================================================
     # Polling Loop
     # =========================================================================
@@ -343,6 +392,10 @@ class VeniceTelegramBot:
                     await self.handle_balance(chat_id)
                 elif text in ("/keys", "🔑 List Keys"):
                     await self.handle_list_keys(chat_id)
+                elif text in ("/report", "📋 Daily Keys Report"):
+                    await self.handle_daily_report(chat_id)
+                elif text in ("/alert", "⚠️ Low Balance Alert"):
+                    await self.handle_low_balance_alert(chat_id)
                 elif text in ("/create", "➕ Mint Key"):
                     await self.handle_start_mint_flow(chat_id, user_id)
                 elif text in ("/cycle", "🔄 Cycle Key"):
@@ -351,7 +404,9 @@ class VeniceTelegramBot:
                     await self.handle_quick_test(chat_id)
                 elif text in ("/models", "🔒 E2EE Models"):
                     await self.handle_e2ee_models(chat_id)
-                elif text == "/backup":
+                elif text in ("/dashboard", "🌐 Web Dashboard"):
+                    await self.handle_dashboard_link(chat_id)
+                elif text in ("/backup", "💾 Download Backup"):
                     backup = state_store.export_backup()
                     await self.send_message(chat_id, f"💾 *Backup JSON:*\n```json\n{backup.model_dump_json(indent=2)}\n```")
                 elif text.startswith("/create "):

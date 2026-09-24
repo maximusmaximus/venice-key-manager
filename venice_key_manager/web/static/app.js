@@ -17,6 +17,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initPlayground();
   initBackup();
   initSettings();
+  initReport();
 
   // Load initial data
   loadBalance();
@@ -854,3 +855,71 @@ function jsonParseSafe(str) {
     return null;
   }
 }
+
+// =============================================================================
+// DAILY REPORT
+// =============================================================================
+function initReport() {
+  const btnOpen = document.getElementById("btn-open-report");
+  const modal = document.getElementById("modal-report");
+  const pre = document.getElementById("report-content-pre");
+  const btnRefresh = document.getElementById("btn-refresh-report");
+  const btnCopy = document.getElementById("btn-copy-report");
+  const btnSendTg = document.getElementById("btn-send-report-tg");
+
+  let currentMarkdown = "";
+
+  async function fetchReport() {
+    pre.innerText = "Generating live Venice usage report...";
+    try {
+      const res = await fetch("/api/report");
+      if (!res.ok) throw new Error("Failed to load report");
+      const data = await res.json();
+      currentMarkdown = data.markdown;
+      pre.innerText = data.markdown;
+    } catch (err) {
+      pre.innerText = `Error: ${err.message}`;
+      showToast("Failed to generate report", "error");
+    }
+  }
+
+  if (btnOpen) {
+    btnOpen.addEventListener("click", () => {
+      modal.classList.remove("hidden");
+      fetchReport();
+    });
+  }
+
+  if (btnRefresh) {
+    btnRefresh.addEventListener("click", fetchReport);
+  }
+
+  if (btnCopy) {
+    btnCopy.addEventListener("click", () => {
+      if (!currentMarkdown) return;
+      navigator.clipboard.writeText(currentMarkdown);
+      showToast("Report markdown copied to clipboard!", "success");
+    });
+  }
+
+  if (btnSendTg) {
+    btnSendTg.addEventListener("click", async () => {
+      btnSendTg.disabled = true;
+      btnSendTg.innerText = "Sending...";
+      try {
+        const res = await fetch("/api/report/send", { method: "POST" });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || "Failed to dispatch report");
+        }
+        showToast("Report successfully dispatched to Telegram!", "success");
+      } catch (err) {
+        showToast(err.message, "error");
+      } finally {
+        btnSendTg.disabled = false;
+        btnSendTg.innerText = "✈️ Send to Telegram";
+      }
+    });
+  }
+}
+

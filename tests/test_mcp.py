@@ -44,3 +44,5 @@ async def test_mcp_tools_list():
     assert "venice_list_models" in tool_names
     assert "venice_test_inference" in tool_names
     assert "venice_export_backup" in tool_names
+    assert "venice_daily_report" in tool_names
+

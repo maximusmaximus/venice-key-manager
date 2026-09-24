@@ -30,6 +30,9 @@
     </div>
 
     <div class="header-right">
+      <button class="btn btn-secondary btn-sm" id="btn-open-report">
+        📋 Daily Report
+      </button>
       <button class="btn btn-secondary btn-sm" id="btn-open-settings">
         ⚙️ Settings & Thresholds
       </button>
@@ -565,6 +568,33 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" data-close-modal="modal-backup">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: DAILY REPORT -->
+  <!-- ========================================================================= -->
+  <div id="modal-report" class="modal-backdrop hidden">
+    <div class="modal-box modal-lg">
+      <div class="modal-header">
+        <h3 class="modal-title">📋 Daily Key Usage & Operations Report</h3>
+        <button class="modal-close" data-close-modal="modal-report">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="report-toolbar mb-3 flex-between">
+          <div>
+            <button class="btn btn-secondary btn-sm" id="btn-refresh-report">🔄 Refresh</button>
+            <button class="btn btn-secondary btn-sm" id="btn-copy-report">📋 Copy Markdown</button>
+          </div>
+          <div>
+            <button class="btn btn-primary btn-sm" id="btn-send-report-tg">✈️ Send to Telegram</button>
+          </div>
+        </div>
+        <pre id="report-content-pre" class="code-block-large">Loading daily report...</pre>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal="modal-report">Close</button>
       </div>
     </div>
   </div>

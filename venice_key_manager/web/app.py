@@ -239,6 +239,35 @@ async def import_backup(file: UploadFile = File(...)):
 
 
 # =============================================================================
+# Daily Key Usage Report API
+# =============================================================================
+
+@app.get("/api/report")
+async def get_daily_report():
+    try:
+        from ..report import DailyKeyReport
+        reporter = DailyKeyReport(client=client)
+        data = await reporter.generate_report_data()
+        md = reporter.format_markdown(data)
+        return {"data": data, "markdown": md}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/report/send")
+async def send_daily_report(chat_id: Optional[str] = Query(None)):
+    try:
+        from ..report import DailyKeyReport
+        reporter = DailyKeyReport(client=client)
+        sent = await reporter.send_to_telegram(chat_id=chat_id)
+        if not sent:
+            raise HTTPException(status_code=500, detail="Failed to dispatch report to Telegram.")
+        return {"success": True, "message": "Daily report sent to Telegram."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
 # Real-Time SSE Feed
 # =============================================================================
 

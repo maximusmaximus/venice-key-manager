@@ -76,6 +76,12 @@ def main():
     import_b = backup_sub.add_parser("import", help="Import state backup from JSON file")
     import_b.add_argument("--file", "-f", required=True, help="JSON backup file path")
 
+    # 11. Daily Report
+    report_p = subparsers.add_parser("report", help="Generate and send daily key usage report")
+    report_p.add_argument("--send-tg", action="store_true", help="Dispatch report to Telegram chat")
+    report_p.add_argument("--chat", help="Target Telegram chat ID")
+    report_p.add_argument("--json", action="store_true", help="Output raw JSON data")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -190,6 +196,19 @@ def main():
                 data = json.load(f)
             ok = state_store.import_backup(data)
             print(f"{'✅ Restored' if ok else '❌ Failed to restore'} backup from {args.file}")
+
+    elif args.command == "report":
+        from .report import DailyKeyReport
+        reporter = DailyKeyReport()
+        data = asyncio.run(reporter.generate_report_data())
+        if args.json:
+            print(json.dumps(data, indent=2))
+        else:
+            md = reporter.format_markdown(data)
+            print("\n" + md + "\n")
+            if args.send_tg:
+                sent = asyncio.run(reporter.send_to_telegram(chat_id=args.chat))
+                print(f"[Telegram] Report dispatched: {'✅ Success' if sent else '❌ Failed'}")
 
 
 if __name__ == "__main__":
