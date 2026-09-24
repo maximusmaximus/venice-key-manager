@@ -74,6 +74,11 @@ class DailyKeyReport:
         bundled_credits = float(getattr(rates.balances, "BUNDLED_CREDITS", 0.0) or 0.0)
         now_dt = datetime.utcnow()
 
+        # Generate authenticated dashboard link for this report
+        token = state_store.create_auth_token(created_by="daily_report")
+        base_url = config.dashboard_base_url.rstrip("/")
+        magic_url = f"{base_url}/?token={token}"
+
         return {
             "timestamp": now_dt.isoformat() + "Z",
             "timestamp_human": now_dt.strftime("%Y-%m-%d %H:%M:%S UTC"),
@@ -86,6 +91,11 @@ class DailyKeyReport:
                 "global_threshold": global_thresh,
                 "next_epoch_begins": rates.nextEpochBegins,
                 "api_tier": rates.apiTier.id if rates.apiTier else "paid",
+            },
+            "control_plane": {
+                "base_url": base_url,
+                "magic_url": magic_url,
+                "token": token,
             },
             "summary": {
                 "total_keys": total_keys,
@@ -182,7 +192,12 @@ class DailyKeyReport:
         lines.append("")
         lines.append("🌐 OPERATIONS & CONTROL PLANE")
         lines.append("─────────────────────────────────────────────────")
-        lines.append("  🖥️ Web Dashboard:  http://localhost:8660")
+        cp = data.get("control_plane", {})
+        web_link = cp.get("magic_url") or f"{config.dashboard_base_url.rstrip('/')}/"
+        token_str = cp.get("token")
+        lines.append(f"  🖥️ Web Link:        {web_link}")
+        if token_str:
+            lines.append(f"  🔑 Access Key:     {token_str}")
         lines.append("  🤖 Telegram Bot:   @v3n15_bot")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
@@ -265,7 +280,12 @@ class DailyKeyReport:
         lines.append("")
         lines.append("🌐 <b>OPERATIONS &amp; CONTROL PLANE</b>")
         lines.append("─────────────────────────────────────")
-        lines.append("  🖥️ <b>Web Dashboard:</b> <code>http://localhost:8660</code>")
+        cp = data.get("control_plane", {})
+        web_link = cp.get("magic_url") or f"{config.dashboard_base_url.rstrip('/')}/"
+        token_str = cp.get("token")
+        lines.append(f'  🖥️ <b>Web Link:</b> <a href="{web_link}">{web_link}</a>')
+        if token_str:
+            lines.append(f"  🔑 <b>Access Key:</b> <code>{token_str}</code>")
         lines.append("  🤖 <b>Telegram Bot:</b> <code>@v3n15_bot</code>")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
