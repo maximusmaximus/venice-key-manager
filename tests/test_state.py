@@ -73,3 +73,28 @@ def test_backup_export_and_import(temp_store, tmp_path):
     assert "ExportCat" in new_store.get_categories()
     assert new_store.get_global_threshold() == 0.35
     assert new_store.get_key_meta("key-abc")["category"] == "ExportCat"
+
+
+def test_auth_tokens(temp_store):
+    token = temp_store.create_auth_token(created_by="telegram:12345", ttl_hours=24)
+    assert token.startswith("vkm_tg_")
+    assert len(token) > 30
+
+    # Valid token
+    assert temp_store.validate_auth_token(token) is True
+
+    # Bad token
+    assert temp_store.validate_auth_token("nonexistent_token") is False
+    assert temp_store.validate_auth_token(None) is False
+    assert temp_store.validate_auth_token("") is False
+
+    # List active
+    active = temp_store.list_active_tokens()
+    assert len(active) == 1
+    assert active[0]["token"] == token
+    assert active[0]["created_by"] == "telegram:12345"
+
+    # Revoke
+    assert temp_store.revoke_auth_token(token) is True
+    assert temp_store.validate_auth_token(token) is False
+

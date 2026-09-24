@@ -32,6 +32,8 @@ class AppConfig(BaseModel):
     ])
     mcp_port: int = Field(default_factory=lambda: int(os.getenv("MCP_PORT", "8661")))
     data_dir: Path = Field(default_factory=lambda: Path(os.getenv("DATA_DIR", "./data")))
+    dashboard_base_url: str = Field(default_factory=lambda: os.getenv("DASHBOARD_BASE_URL", "http://localhost:8660"))
+    web_auth_token: Optional[str] = Field(default_factory=lambda: os.getenv("WEB_AUTH_TOKEN") or None)
 
     def ensure_data_dir(self) -> Path:
         self.data_dir.mkdir(parents=True, exist_ok=True)

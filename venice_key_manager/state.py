@@ -1,5 +1,7 @@
 import json
 import logging
+import secrets
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from .config import config
@@ -18,6 +20,7 @@ class StateStore:
         self._categories: List[str] = list(DEFAULT_CATEGORIES)
         self._key_metadata: Dict[str, Dict[str, Any]] = {}
         self._global_threshold: float = config.low_usd_warning_threshold
+        self._auth_tokens: Dict[str, Dict[str, Any]] = {}
         self._load()
 
     def _load(self):
@@ -28,6 +31,7 @@ class StateStore:
                     self._categories = data.get("categories", list(DEFAULT_CATEGORIES))
                     self._key_metadata = data.get("key_metadata", {})
                     self._global_threshold = float(data.get("global_threshold", config.low_usd_warning_threshold))
+                    self._auth_tokens = data.get("auth_tokens", {})
             except Exception as e:
                 logger.error(f"Failed to load state from {self.state_file}: {e}")
 
@@ -38,6 +42,7 @@ class StateStore:
                 "categories": self._categories,
                 "key_metadata": self._key_metadata,
                 "global_threshold": self._global_threshold,
+                "auth_tokens": self._auth_tokens,
             }
             with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
@@ -141,6 +146,86 @@ class StateStore:
         except Exception as e:
             logger.error(f"Failed to import backup: {e}")
             return False
+
+    # --- Auth Tokens (Telegram-generated session keys) ---
+    def create_auth_token(self, created_by: str = "telegram", ttl_hours: int = 168) -> str:
+        """Create and persist a cryptographically random access token."""
+        self._load()
+        token = "vkm_tg_" + secrets.token_hex(24)
+        now = datetime.utcnow()
+        expires_at = (now + timedelta(hours=ttl_hours)).isoformat() + "Z"
+        self._auth_tokens[token] = {
+            "token": token,
+            "created_at": now.isoformat() + "Z",
+            "expires_at": expires_at,
+            "created_by": created_by,
+            "active": True
+        }
+        self.save()
+        return token
+
+    def validate_auth_token(self, token: Optional[str]) -> bool:
+        """Check if a token is valid, active, and unexpired."""
+        if not token or not isinstance(token, str):
+            return False
+        token = token.strip()
+        if not token:
+            return False
+        
+        # Check static token override from env
+        if config.web_auth_token and token == config.web_auth_token:
+            return True
+
+        # If not present in memory, reload state from disk (e.g. created by bot/CLI in another process)
+        if token not in self._auth_tokens:
+            self._load()
+
+        if token not in self._auth_tokens:
+            return False
+
+        meta = self._auth_tokens[token]
+        if not meta.get("active", True):
+            return False
+
+        exp = meta.get("expires_at")
+        if exp:
+            try:
+                exp_clean = exp.rstrip("Z")
+                exp_dt = datetime.fromisoformat(exp_clean)
+                if datetime.utcnow() > exp_dt:
+                    return False
+            except Exception:
+                pass
+
+        return True
+
+    def revoke_auth_token(self, token: str) -> bool:
+        """Deactivate an access token."""
+        self._load()
+        if token in self._auth_tokens:
+            self._auth_tokens[token]["active"] = False
+            self.save()
+            return True
+        return False
+
+    def list_active_tokens(self) -> List[Dict[str, Any]]:
+        """List all valid, unexpired tokens."""
+        self._load()
+        now = datetime.utcnow()
+        active = []
+        for t, meta in self._auth_tokens.items():
+            if not meta.get("active", True):
+                continue
+            exp = meta.get("expires_at")
+            if exp:
+                try:
+                    exp_clean = exp.rstrip("Z")
+                    if now > datetime.fromisoformat(exp_clean):
+                        continue
+                except Exception:
+                    pass
+            active.append(dict(meta))
+        return active
 
 
 # Global singleton instance

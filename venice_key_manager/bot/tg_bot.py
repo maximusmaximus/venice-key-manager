@@ -318,14 +318,18 @@ class VeniceTelegramBot:
         await self.send_message(chat_id, "\n".join(lines))
 
     async def handle_dashboard_link(self, chat_id: int):
+        token = state_store.create_auth_token(created_by=f"telegram:{chat_id}")
+        base_url = config.dashboard_base_url.rstrip("/")
+        magic_url = f"{base_url}/?token={token}"
+
         msg = (
-            "🌐 *Venice Key Manager Control Plane*\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            "Dashboard URL: `http://localhost:8660`\n\n"
-            "• Live SSE spending graphs & epoch countdowns\n"
-            "• Category grouping & per-key alert thresholds\n"
-            "• 1-Click key rotation & clipboard copying\n"
-            "• Downloadable settings & state backups"
+            "🌐 *Venice Key Manager — Web Dashboard Access*\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "The web dashboard is protected. Access requires an authenticated Telegram session key.\n\n"
+            f"🔗 *Single-Click Magic Link:*\n{magic_url}\n\n"
+            f"🔑 *Pasteable Access Key:*\n`{token}`\n\n"
+            "⏱️ *Validity:* 7 days\n"
+            "🔒 Opening the magic link automatically authenticates and unlocks your control plane."
         )
         await self.send_message(chat_id, msg)
 

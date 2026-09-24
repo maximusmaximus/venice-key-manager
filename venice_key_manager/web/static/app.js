@@ -2,6 +2,10 @@
 // Venice Key Manager - Reactive Client Application
 // =============================================================================
 
+const AUTH_TOKEN_KEY = "vkm_auth_token";
+let authToken = localStorage.getItem(AUTH_TOKEN_KEY) || "";
+let dashboardInitialized = false;
+
 let allKeys = [];
 let allModels = [];
 let allCategories = ["Default", "Agents", "Production", "Testing", "Telegram"];
@@ -9,41 +13,213 @@ let activeCategory = "all";
 let globalThreshold = 0.20;
 let sseSource = null;
 
-document.addEventListener("DOMContentLoaded", () => {
-  initTabs();
-  initCopyButtons();
-  initModals();
-  initPresets();
-  initPlayground();
-  initBackup();
-  initSettings();
-  initReport();
+// Authenticated wrapper around fetch
+async function authFetch(url, options = {}) {
+  options.headers = options.headers || {};
+  const currentToken = authToken || localStorage.getItem(AUTH_TOKEN_KEY) || "";
 
-  // Load initial data
+  if (currentToken) {
+    if (options.headers instanceof Headers) {
+      options.headers.set("Authorization", `Bearer ${currentToken}`);
+      options.headers.set("X-Access-Token", currentToken);
+    } else {
+      options.headers["Authorization"] = `Bearer ${currentToken}`;
+      options.headers["X-Access-Token"] = currentToken;
+    }
+  }
+
+  const res = await fetch(url, options);
+  if (res.status === 401) {
+    lockDashboard("Session expired or access revoked. Please enter a valid Telegram key.");
+    throw new Error("Unauthorized");
+  }
+  return res;
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  initAuth();
+});
+
+function initAuth() {
+  const form = document.getElementById("auth-gate-form");
+  const input = document.getElementById("auth-key-input");
+  const btnSubmit = document.getElementById("btn-submit-auth");
+  const btnLock = document.getElementById("btn-lock-session");
+
+  // 1. Check if server-side validated token
+  if (window.__INITIALLY_AUTH && window.__URL_TOKEN) {
+    authToken = window.__URL_TOKEN;
+    localStorage.setItem(AUTH_TOKEN_KEY, authToken);
+    cleanUrlToken();
+    unlockDashboard();
+    return;
+  }
+
+  // 2. Check if URL has ?token=
+  const urlParams = new URLSearchParams(window.location.search);
+  const tokenFromUrl = urlParams.get("token");
+  if (tokenFromUrl) {
+    verifyAndUnlock(tokenFromUrl);
+    return;
+  }
+
+  // 3. Check localStorage
+  const savedToken = localStorage.getItem(AUTH_TOKEN_KEY);
+  if (savedToken) {
+    verifyAndUnlock(savedToken);
+    return;
+  }
+
+  // 4. Otherwise, show auth gate
+  showAuthGate();
+
+  if (form) {
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const val = input.value.trim();
+      if (!val) {
+        showAuthGate("Please enter your Telegram access key.");
+        return;
+      }
+      btnSubmit.disabled = true;
+      btnSubmit.innerText = "Verifying...";
+      verifyAndUnlock(val, () => {
+        btnSubmit.disabled = false;
+        btnSubmit.innerText = "Unlock 🔓";
+      });
+    });
+  }
+
+  if (btnLock) {
+    btnLock.addEventListener("click", () => {
+      lockDashboard();
+    });
+  }
+}
+
+async function verifyAndUnlock(token, onComplete) {
+  try {
+    const res = await fetch("/api/auth/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: token.trim() })
+    });
+    if (!res.ok) {
+      throw new Error("Invalid or expired key");
+    }
+    authToken = token.trim();
+    localStorage.setItem(AUTH_TOKEN_KEY, authToken);
+    cleanUrlToken();
+    unlockDashboard();
+    showToast("Dashboard unlocked successfully!", "success");
+  } catch (err) {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    authToken = "";
+    showAuthGate("Invalid or expired access key. Please generate a new key in Telegram.");
+  } finally {
+    if (onComplete) onComplete();
+  }
+}
+
+function unlockDashboard() {
+  const gate = document.getElementById("auth-gate-screen");
+  const main = document.getElementById("app-main-content");
+  if (gate) gate.classList.add("hidden");
+  if (main) main.classList.remove("hidden");
+
+  // Update backup download link if present
+  const backupDownloadBtn = document.querySelector('a[href^="/api/backup/export"]');
+  if (backupDownloadBtn && authToken) {
+    backupDownloadBtn.href = `/api/backup/export?token=${encodeURIComponent(authToken)}`;
+  }
+
+  initDashboardUI();
+}
+
+function showAuthGate(errorMsg) {
+  if (sseSource) {
+    sseSource.close();
+    sseSource = null;
+  }
+  const gate = document.getElementById("auth-gate-screen");
+  const main = document.getElementById("app-main-content");
+  if (gate) gate.classList.remove("hidden");
+  if (main) main.classList.add("hidden");
+
+  const errBanner = document.getElementById("auth-error-banner");
+  const errText = document.getElementById("auth-error-text");
+  if (errorMsg && errBanner && errText) {
+    errBanner.classList.remove("hidden");
+    errText.innerText = errorMsg;
+  } else if (errBanner) {
+    errBanner.classList.add("hidden");
+  }
+}
+
+function lockDashboard(msg) {
+  authToken = "";
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+  showAuthGate(msg || "");
+  showToast(msg || "Dashboard session locked.", "info");
+}
+
+function cleanUrlToken() {
+  if (window.location.search.includes("token=")) {
+    const cleanUrl = window.location.pathname;
+    window.history.replaceState({}, document.title, cleanUrl);
+  }
+}
+
+function initDashboardUI() {
+  if (!dashboardInitialized) {
+    initTabs();
+    initCopyButtons();
+    initModals();
+    initPresets();
+    initPlayground();
+    initBackup();
+    initSettings();
+    initReport();
+
+    // Refresh button
+    const btnRefresh = document.getElementById("btn-refresh");
+    if (btnRefresh) {
+      btnRefresh.addEventListener("click", () => {
+        loadBalance();
+        loadKeys();
+        loadModels();
+        showToast("Data refreshed from Venice cloud", "info");
+      });
+    }
+
+    // Search and filter listeners
+    const keySearch = document.getElementById("key-search-input");
+    if (keySearch) keySearch.addEventListener("input", renderKeysTable);
+
+    const toggleLow = document.getElementById("toggle-low-balance-only");
+    if (toggleLow) toggleLow.addEventListener("change", renderKeysTable);
+
+    const modelSearch = document.getElementById("model-search-input");
+    if (modelSearch) modelSearch.addEventListener("input", renderModelsTable);
+
+    const btnCloseBanner = document.getElementById("btn-close-banner");
+    if (btnCloseBanner) {
+      btnCloseBanner.addEventListener("click", () => {
+        document.getElementById("low-balance-banner").classList.add("hidden");
+      });
+    }
+
+    dashboardInitialized = true;
+  }
+
+  // Always reload fresh data
   loadBalance();
   loadCategories();
   loadKeys();
   loadModels();
   initSSE();
-
-  // Refresh button
-  document.getElementById("btn-refresh").addEventListener("click", () => {
-    loadBalance();
-    loadKeys();
-    loadModels();
-    showToast("Data refreshed from Venice cloud", "info");
-  });
-
-  // Search and filter listeners
-  document.getElementById("key-search-input").addEventListener("input", renderKeysTable);
-  document.getElementById("toggle-low-balance-only").addEventListener("change", renderKeysTable);
-  document.getElementById("model-search-input").addEventListener("input", renderModelsTable);
-
-  // Close banner listener
-  document.getElementById("btn-close-banner").addEventListener("click", () => {
-    document.getElementById("low-balance-banner").classList.add("hidden");
-  });
-});
+}
 
 // =============================================================================
 // TOAST NOTIFICATIONS
@@ -117,7 +293,7 @@ function initTabs() {
 // =============================================================================
 async function loadBalance() {
   try {
-    const res = await fetch("/api/balance");
+    const res = await authFetch("/api/balance");
     if (!res.ok) throw new Error("Failed to load balance");
     const data = await res.json();
     updateBalanceUI(data);
@@ -181,7 +357,8 @@ function updateEpochCountdown(isoStr) {
 function initSSE() {
   if (sseSource) sseSource.close();
   try {
-    sseSource = new EventSource("/api/sse/stats");
+    const sseUrl = "/api/sse/stats?token=" + encodeURIComponent(authToken);
+    sseSource = new EventSource(sseUrl);
     sseSource.onmessage = (event) => {
       try {
         const data = jsonParseSafe(event.data);
@@ -214,7 +391,7 @@ function initSSE() {
 // =============================================================================
 async function loadCategories() {
   try {
-    const res = await fetch("/api/categories");
+    const res = await authFetch("/api/categories");
     const data = await res.json();
     allCategories = data.categories || [];
     renderCategoryPills();
@@ -273,7 +450,7 @@ function populateCategoryDropdowns() {
 // =============================================================================
 async function loadKeys() {
   try {
-    const res = await fetch("/api/keys");
+    const res = await authFetch("/api/keys");
     if (!res.ok) throw new Error("Failed to load keys");
     allKeys = await res.json();
 
@@ -429,7 +606,7 @@ async function handleCreateKey() {
   };
 
   try {
-    const res = await fetch("/api/keys", {
+    const res = await authFetch("/api/keys", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
@@ -490,7 +667,7 @@ async function handleCycleKey() {
   };
 
   try {
-    const res = await fetch(`/api/keys/${keyId}/cycle`, {
+    const res = await authFetch(`/api/keys/${keyId}/cycle`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
@@ -553,7 +730,7 @@ async function handleEditKey() {
   };
 
   try {
-    const res = await fetch(`/api/keys/${keyId}`, {
+    const res = await authFetch(`/api/keys/${keyId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
@@ -579,7 +756,7 @@ async function revokeKey(keyId) {
   }
 
   try {
-    const res = await fetch(`/api/keys/${keyId}`, { method: "DELETE" });
+    const res = await authFetch(`/api/keys/${keyId}`, { method: "DELETE" });
     if (!res.ok) throw new Error("Revocation failed");
     showToast(`Key "${name}" revoked`, "success");
     loadKeys();
@@ -593,7 +770,7 @@ async function revokeKey(keyId) {
 // =============================================================================
 async function loadModels() {
   try {
-    const res = await fetch("/api/models");
+    const res = await authFetch("/api/models");
     if (!res.ok) throw new Error("Failed to load models");
     allModels = await res.json();
     document.getElementById("tab-models-count").innerText = allModels.length;
@@ -693,7 +870,7 @@ function initPlayground() {
     document.getElementById("play-output-box").innerText = "Contacting Venice inference endpoint...";
 
     try {
-      const res = await fetch("/api/inference/test", {
+      const res = await authFetch("/api/inference/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt, model, api_key: apiKey })
@@ -745,7 +922,7 @@ function initSettings() {
   document.getElementById("btn-save-settings").addEventListener("click", async () => {
     const newThresh = parseFloat(document.getElementById("settings-global-threshold").value);
     if (!isNaN(newThresh)) {
-      await fetch("/api/settings", {
+      await authFetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ global_threshold: newThresh })
@@ -762,7 +939,7 @@ function initSettings() {
     const input = document.getElementById("new-category-input");
     const cat = input.value.trim();
     if (!cat) return;
-    await fetch("/api/categories", {
+    await authFetch("/api/categories", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ category: cat })
@@ -785,7 +962,7 @@ function renderSettingsCategoriesList() {
 }
 
 async function deleteCategory(cat) {
-  await fetch(`/api/categories/${encodeURIComponent(cat)}`, { method: "DELETE" });
+  await authFetch(`/api/categories/${encodeURIComponent(cat)}`, { method: "DELETE" });
   loadCategories();
   renderSettingsCategoriesList();
   showToast(`Category "${cat}" removed`, "info");
@@ -809,7 +986,7 @@ function initBackup() {
     formData.append("file", fileInput.files[0]);
 
     try {
-      const res = await fetch("/api/backup/import", {
+      const res = await authFetch("/api/backup/import", {
         method: "POST",
         body: formData
       });
@@ -872,7 +1049,7 @@ function initReport() {
   async function fetchReport() {
     pre.innerText = "Generating live Venice usage report...";
     try {
-      const res = await fetch("/api/report");
+      const res = await authFetch("/api/report");
       if (!res.ok) throw new Error("Failed to load report");
       const data = await res.json();
       currentMarkdown = data.markdown;
@@ -907,7 +1084,7 @@ function initReport() {
       btnSendTg.disabled = true;
       btnSendTg.innerText = "Sending...";
       try {
-        const res = await fetch("/api/report/send", { method: "POST" });
+        const res = await authFetch("/api/report/send", { method: "POST" });
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
           throw new Error(errData.detail || "Failed to dispatch report");

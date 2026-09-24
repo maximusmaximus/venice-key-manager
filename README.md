@@ -27,7 +27,7 @@ Built directly against the official Venice.ai REST API specifications, Venice Ke
   * Configurable global threshold and custom per-key override thresholds.
   * Prominent alert banners, table warning badges, and Telegram alerts.
 * **Key Grouping & Categories**: Organize keys into logical categories (`Agents`, `Production`, `Testing`, `Telegram`, `Research`, or custom tags).
-* **Downloadable State & Settings Backup**: 1-click JSON backup export and import for disaster recovery and multi-instance synchronization.
+* **Telegram Access Gate & One-Click Magic Links**: The web dashboard is secured behind a cryptographic access gate and cannot be loaded without an active key. Keys are generated on-demand in Telegram via `/dashboard` or `[ 🌐 Web Dashboard ]`, delivered as a pasteable token or a single-click URL (`/?token=...`). All backend API endpoints return HTTP 401 Unauthorized for unauthenticated requests.
 * **Full Kitchen-Sink Telegram Touch Bot**: Complete 10-button touch grid with persistent reply keyboard, inline rotation selectors, daily report dispatch, balance warnings, and light inference benchmarks.
 * **Inference Playground & Health Probes**: Run instantaneous lightweight completions to measure token count, cost estimation, and API latency.
 
@@ -202,6 +202,14 @@ venice-key-manager revoke --id <key_id>
 
 # Run a test inference
 venice-key-manager test --prompt "Hello Venice" --model deepseek-v4-flash
+
+# Generate magic dashboard link and pasteable token
+venice-key-manager dashboard-link
+
+# Manage authentication tokens
+venice-key-manager auth create-token --ttl 168
+venice-key-manager auth list-tokens
+venice-key-manager auth revoke-token <token>
 
 # Export and import backups
 venice-key-manager backup export --out my-backup.json

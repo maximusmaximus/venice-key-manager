@@ -2,7 +2,6 @@ import sys
 import json
 import asyncio
 import argparse
-import uvicorn
 
 from .config import config
 from .client import VeniceClient
@@ -82,6 +81,22 @@ def main():
     report_p.add_argument("--chat", help="Target Telegram chat ID")
     report_p.add_argument("--json", action="store_true", help="Output raw JSON data")
 
+    # Dashboard link
+    p_dash = subparsers.add_parser("dashboard-link", help="Generate Telegram-authenticated magic link and access key")
+    p_dash.add_argument("--base-url", default=None, help="Base URL override (defaults to DASHBOARD_BASE_URL)")
+    p_dash.add_argument("--user", default="controller_tg", help="User tag")
+
+    # Auth token management
+    p_auth = subparsers.add_parser("auth", help="Manage dashboard access keys")
+    auth_sub = p_auth.add_subparsers(dest="auth_action", required=True)
+    p_auth_create = auth_sub.add_parser("create-token", help="Generate a new access key")
+    p_auth_create.add_argument("--ttl", type=int, default=168, help="Token validity in hours (default: 168)")
+    p_auth_create.add_argument("--user", default="cli_admin", help="User tag")
+
+    auth_sub.add_parser("list-tokens", help="List active access tokens")
+    p_auth_revoke = auth_sub.add_parser("revoke-token", help="Revoke an access token")
+    p_auth_revoke.add_argument("token", help="Token string to revoke")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -90,6 +105,7 @@ def main():
 
     # Dispatch
     if args.command == "web":
+        import uvicorn
         print(f"🚀 Starting Venice Key Manager Web Dashboard at http://{args.host}:{args.port}")
         uvicorn.run("venice_key_manager.web.app:app", host=args.host, port=args.port, reload=args.reload)
 
@@ -209,6 +225,25 @@ def main():
             if args.send_tg:
                 sent = asyncio.run(reporter.send_to_telegram(chat_id=args.chat))
                 print(f"[Telegram] Report dispatched: {'✅ Success' if sent else '❌ Failed'}")
+
+    elif args.command == "dashboard-link":
+        token = state_store.create_auth_token(created_by=args.user)
+        base = (args.base_url or config.dashboard_base_url).rstrip("/")
+        magic_url = f"{base}/?token={token}"
+        print("🌐 Venice Key Manager Dashboard Access:")
+        print(f"🔗 Single-Click Magic Link: {magic_url}")
+        print(f"🔑 Telegram Access Key: {token}")
+
+    elif args.command == "auth":
+        if args.auth_action == "create-token":
+            t = state_store.create_auth_token(created_by=args.user, ttl_hours=args.ttl)
+            print(f"✅ Generated access key: {t}")
+        elif args.auth_action == "list-tokens":
+            tokens = state_store.list_active_tokens()
+            print(json.dumps(tokens, indent=2))
+        elif args.auth_action == "revoke-token":
+            ok = state_store.revoke_auth_token(args.token)
+            print(f"{'✅ Revoked' if ok else '❌ Token not found'}")
 
 
 if __name__ == "__main__":
