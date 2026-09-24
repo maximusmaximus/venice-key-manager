@@ -4,12 +4,21 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
-# Search for .env in current working dir, parent dirs, or package dir
-load_dotenv(dotenv_path=Path.cwd() / ".env")
+# Search for .env in explicit env var, current working dir, package dir, or /opt/venice-key-manager
+env_candidates = [
+    os.getenv("VENICE_KEY_MANAGER_ENV"),
+    Path.cwd() / ".env",
+    Path(__file__).resolve().parent.parent / ".env",
+    Path("/opt/venice-key-manager/.env"),
+]
+for p in env_candidates:
+    if p and Path(p).exists():
+        load_dotenv(dotenv_path=Path(p), override=False)
+        break
 
 
 class AppConfig(BaseModel):
-    venice_api_key: str = Field(default_factory=lambda: os.getenv("VENICE_API_KEY", ""))
+    venice_api_key: str = Field(default_factory=lambda: os.getenv("VENICE_ADMIN_KEY") or os.getenv("VENICE_API_KEY", ""))
     venice_base_url: str = Field(default_factory=lambda: os.getenv("VENICE_BASE_URL", "https://api.venice.ai/api/v1").rstrip("/"))
     web_host: str = Field(default_factory=lambda: os.getenv("WEB_HOST", "0.0.0.0"))
     web_port: int = Field(default_factory=lambda: int(os.getenv("WEB_PORT", "8660")))
