@@ -64,19 +64,35 @@ def extract_token_from_request(
     token: Optional[str] = Query(None),
 ) -> Optional[str]:
     """Extract auth token from query string, custom header, Bearer header, or cookie."""
-    if token:
+    # 1. Query parameter
+    if isinstance(token, str) and token.strip():
         return token.strip()
-    if x_access_token:
+    
+    q_token = request.query_params.get("token") or request.query_params.get("key") or request.query_params.get("auth")
+    if q_token and isinstance(q_token, str) and q_token.strip():
+        return q_token.strip()
+
+    # 2. Custom header X-Access-Token
+    if isinstance(x_access_token, str) and x_access_token.strip():
         return x_access_token.strip()
-    if authorization:
-        parts = authorization.strip().split()
+    hdr_x = request.headers.get("X-Access-Token")
+    if hdr_x and hdr_x.strip():
+        return hdr_x.strip()
+
+    # 3. Bearer authorization header
+    auth_val = authorization if isinstance(authorization, str) else request.headers.get("Authorization")
+    if auth_val:
+        parts = auth_val.strip().split()
         if len(parts) == 2 and parts[0].lower() == "bearer":
             return parts[1].strip()
         elif len(parts) == 1:
             return parts[0].strip()
+
+    # 4. Cookie
     cookie_token = request.cookies.get("vkm_auth_token")
-    if cookie_token:
+    if cookie_token and isinstance(cookie_token, str) and cookie_token.strip():
         return cookie_token.strip()
+
     return None
 
 
@@ -91,24 +107,44 @@ def require_auth(request: Request, token: Optional[str] = Depends(extract_token_
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index_page(request: Request, token: Optional[str] = Query(None)):
-    is_valid_url_token = False
-    if token and state_store.validate_auth_token(token):
-        is_valid_url_token = True
-    response = templates.TemplateResponse("index.html", {
-        "request": request,
-        "url_token": token or "",
-        "initially_authenticated": is_valid_url_token,
-    })
-    if is_valid_url_token:
+@app.head("/")
+async def index_page(
+    request: Request,
+    token: Optional[str] = Query(None),
+    key: Optional[str] = Query(None),
+    auth: Optional[str] = Query(None),
+    extracted: Optional[str] = Depends(extract_token_from_request),
+):
+    candidate_key = token or key or auth
+
+    # 1. URL pairing key auto-login: ?token=, ?key=, or ?auth=
+    if candidate_key and state_store.validate_auth_token(candidate_key):
+        response = templates.TemplateResponse("index.html", {
+            "request": request,
+            "url_token": candidate_key.strip(),
+            "initially_authenticated": True,
+        }, status_code=200)
         response.set_cookie(
             key="vkm_auth_token",
-            value=token.strip(),
+            value=candidate_key.strip(),
             max_age=7 * 24 * 3600,
             httponly=True,
             samesite="lax",
         )
-    return response
+        return response
+
+    # 2. Check if user has an existing valid session via cookie or Authorization header
+    if extracted and state_store.validate_auth_token(extracted):
+        return templates.TemplateResponse("index.html", {
+            "request": request,
+            "url_token": extracted,
+            "initially_authenticated": True,
+        }, status_code=200)
+
+    # 3. UNPAIRED: DO NOT LOAD THE SERVICE! Return status 401 with pairing gate.
+    return templates.TemplateResponse("pairing_gate.html", {
+        "request": request,
+    }, status_code=401)
 
 
 # =============================================================================

@@ -58,13 +58,22 @@ def test_auth_verify_and_authenticated_access():
 
 
 def test_index_page_with_and_without_token():
-    # No token
+    client.cookies.clear()
+    # 1. No token / unpaired: Must return 401 Unauthorized and NOT load the service
     res_unauth = client.get("/")
-    assert res_unauth.status_code == 200
-    assert "auth-gate-screen" in res_unauth.text
+    assert res_unauth.status_code == 401
+    assert "Venice Control Plane Locked" in res_unauth.text
+    assert "app-header" not in res_unauth.text  # Service markup MUST NOT be served!
 
-    # With valid token in URL
+    # 2. With valid ?token= in URL: Must return 200 OK and load the service
     token = state_store.create_auth_token(created_by="url_test")
     res_auth = client.get(f"/?token={token}")
     assert res_auth.status_code == 200
     assert "vkm_auth_token" in res_auth.cookies
+    assert "app-header" in res_auth.text  # Service loaded!
+
+    # 3. With valid ?key= in URL
+    token2 = state_store.create_auth_token(created_by="key_test")
+    res_key = client.get(f"/?key={token2}")
+    assert res_key.status_code == 200
+    assert "app-header" in res_key.text

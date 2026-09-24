@@ -19,71 +19,9 @@
   </script>
 
   <!-- ========================================================================= -->
-  <!-- AUTHENTICATION GATE SCREEN -->
+  <!-- MAIN APPLICATION CONTENT (AUTHENTICATED & PAIRED ONLY) -->
   <!-- ========================================================================= -->
-  <div id="auth-gate-screen" class="auth-gate-wrapper">
-    <div class="auth-card">
-      <div class="auth-header">
-        <div class="auth-icon-halo">
-          <span class="auth-icon">🔒</span>
-        </div>
-        <h2 class="auth-title">Venice Control Plane Locked</h2>
-        <p class="auth-subtitle">
-          Submit an access key generated in Telegram or open your single-click magic link to unlock this interface.
-        </p>
-      </div>
-
-      <div id="auth-error-banner" class="alert-banner alert-danger hidden mb-3">
-        <span class="banner-icon">⚠️</span>
-        <span id="auth-error-text">Invalid or expired access key.</span>
-      </div>
-
-      <form id="auth-gate-form" class="auth-form" onsubmit="return false;">
-        <div class="form-group">
-          <label class="form-label" for="auth-key-input">Telegram Access Key</label>
-          <div class="input-with-button">
-            <input 
-              type="text" 
-              id="auth-key-input" 
-              class="form-control mono" 
-              placeholder="vkm_tg_..." 
-              autocomplete="off" 
-              spellcheck="false"
-              required 
-            />
-            <button type="submit" id="btn-submit-auth" class="btn btn-primary">
-              Unlock 🔓
-            </button>
-          </div>
-          <p class="form-hint">Paste the key sent by @v3n15_bot or controller TG.</p>
-        </div>
-      </form>
-
-      <div class="auth-instructions">
-        <div class="instruction-step">
-          <span class="step-num">1</span>
-          <span>Open Telegram and message <strong>@v3n15_bot</strong></span>
-        </div>
-        <div class="instruction-step">
-          <span class="step-num">2</span>
-          <span>Tap <strong>[ 🌐 Web Dashboard ]</strong> or send <code>/dashboard</code></span>
-        </div>
-        <div class="instruction-step">
-          <span class="step-num">3</span>
-          <span>Open the single-click URL or paste the key above</span>
-        </div>
-      </div>
-
-      <div class="auth-footer">
-        <span>Protected with cryptographic token authorization</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- ========================================================================= -->
-  <!-- MAIN APPLICATION CONTENT (HIDDEN UNTIL AUTHENTICATED) -->
-  <!-- ========================================================================= -->
-  <div id="app-main-content" class="hidden">
+  <div id="app-main-content">
     <!-- Global Header -->
     <header class="app-header">
       <div class="header-left">

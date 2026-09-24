@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Venice Control Plane — Pairing Required</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+  <!-- Toast Notification Container -->
+  <div id="toast-container"></div>
+
+  <!-- ========================================================================= -->
+  <!-- PAIRING GATE SCREEN (HTTP 401 UNAUTHORIZED) -->
+  <!-- The main service is NOT served until paired -->
+  <!-- ========================================================================= -->
+  <div id="auth-gate-screen" class="auth-gate-wrapper">
+    <div class="auth-card">
+      <div class="auth-header">
+        <div class="auth-icon-halo">
+          <span class="auth-icon">🔒</span>
+        </div>
+        <h2 class="auth-title">Venice Control Plane Locked</h2>
+        <p class="auth-subtitle">
+          Device Pairing Required. This service cannot be loaded without an active Telegram pairing key.
+        </p>
+      </div>
+
+      <div id="auth-error-banner" class="alert-banner alert-danger hidden mb-3">
+        <span class="banner-icon">⚠️</span>
+        <span id="auth-error-text">Invalid or expired pairing key.</span>
+      </div>
+
+      <form id="pairing-gate-form" class="auth-form" onsubmit="return false;">
+        <div class="form-group">
+          <label class="form-label" for="auth-key-input">Telegram Pairing Key</label>
+          <div class="input-with-button">
+            <input 
+              type="text" 
+              id="auth-key-input" 
+              class="form-control mono" 
+              placeholder="vkm_tg_..." 
+              autocomplete="off" 
+              spellcheck="false"
+              required 
+            />
+            <button type="submit" id="btn-submit-auth" class="btn btn-primary">
+              Pair Device & Unlock 🔓
+            </button>
+          </div>
+          <p class="form-hint">Paste the key sent by @v3n15_bot or controller TG.</p>
+        </div>
+      </form>
+
+      <div class="auth-instructions">
+        <div class="instruction-step">
+          <span class="step-num">1</span>
+          <span>Open Telegram and message <strong>@v3n15_bot</strong></span>
+        </div>
+        <div class="instruction-step">
+          <span class="step-num">2</span>
+          <span>Tap <strong>[ 🌐 Web Dashboard ]</strong> or send <code>/dashboard</code></span>
+        </div>
+        <div class="instruction-step">
+          <span class="step-num">3</span>
+          <span>Open the single-click URL or paste the pairing key above</span>
+        </div>
+      </div>
+
+      <div class="auth-footer">
+        <span>Protected with zero-trust device pairing · HTTP 401 Unauthorized</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById("pairing-gate-form");
+    const input = document.getElementById("auth-key-input");
+    const errBanner = document.getElementById("auth-error-banner");
+    const errText = document.getElementById("auth-error-text");
+    const btn = document.getElementById("btn-submit-auth");
+
+    async function attemptPair(token) {
+      if (!token) return;
+      btn.disabled = true;
+      btn.innerText = "Pairing...";
+      errBanner.classList.add("hidden");
+
+      try {
+        const res = await fetch("/api/auth/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: token.trim() })
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.detail || "Invalid or expired pairing key.");
+        }
+        localStorage.setItem("vkm_auth_token", token.trim());
+        // Reload root with the valid token to load the full dashboard service
+        window.location.href = "/?token=" + encodeURIComponent(token.trim());
+      } catch (err) {
+        errText.innerText = err.message || "Invalid or expired pairing key.";
+        errBanner.classList.remove("hidden");
+        btn.disabled = false;
+        btn.innerText = "Pair Device & Unlock 🔓";
+      }
+    }
+
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      attemptPair(input.value);
+    });
+
+    window.addEventListener("DOMContentLoaded", () => {
+      const params = new URLSearchParams(window.location.search);
+      const urlKey = params.get("token") || params.get("key") || params.get("auth");
+      if (urlKey) {
+        input.value = urlKey;
+        attemptPair(urlKey);
+      } else {
+        const saved = localStorage.getItem("vkm_auth_token");
+        if (saved) {
+          input.value = saved;
+        }
+      }
+    });
+  </script>
+</body>
+</html>
