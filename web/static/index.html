@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VENICE & TELEGRAM // KEY MANAGEMENT ENGINE</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="top-nav">
+      <div class="brand">
+        <div class="brand-logo">⚡</div>
+        <div class="brand-text">
+          <div class="brand-title">VENICE // TG ENGINE</div>
+          <div class="brand-subtitle">Autonomous Key Management & Deployment Suite</div>
+        </div>
+      </div>
+      <div class="nav-controls">
+        <div class="status-indicator">
+          <span class="status-dot pulse"></span>
+          <span id="api-status-text">VENICE LIVE</span>
+        </div>
+        <button class="btn btn-secondary" id="btn-refresh" title="Refresh Live Data">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+          Refresh
+        </button>
+      </div>
+    </header>
+
+    <!-- Real-time Stats Grid -->
+    <section class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-header">
+          <span class="stat-label">VENICE USD BALANCE</span>
+          <span class="stat-badge badge-green">LIVE</span>
+        </div>
+        <div class="stat-value text-gradient-purple" id="val-usd-balance">$0.00</div>
+        <div class="stat-footer">
+          <span>Tier: <strong id="val-api-tier">PAID</strong></span>
+          <span class="stat-sub" id="val-epoch-info">Next Epoch: Active</span>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-header">
+          <span class="stat-label">DIEM BALANCE</span>
+          <span class="stat-badge badge-purple">TOKEN</span>
+        </div>
+        <div class="stat-value" id="val-diem-balance">0.00</div>
+        <div class="stat-footer">
+          <span>Bundled Credits: <strong id="val-bundled-credits">0</strong></span>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-header">
+          <span class="stat-label">ACTIVE VENICE KEYS</span>
+          <span class="stat-badge badge-cyan" id="badge-admin-status">ADMIN: UNCONFIGURED</span>
+        </div>
+        <div class="stat-value" id="val-keys-count">0</div>
+        <div class="stat-footer">
+          <span>Inference Key: <strong id="val-inf-key-status">Configured</strong></span>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-header">
+          <span class="stat-label">AGENT TELEGRAM BOTS</span>
+          <span class="stat-badge badge-green">VERIFIED</span>
+        </div>
+        <div class="stat-value text-gradient-cyan" id="val-tg-bots-count">1</div>
+        <div class="stat-footer">
+          <span>Primary: <strong id="val-primary-bot">Configured</strong></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Admin Key Alert Banner (if Admin key is not set) -->
+    <div id="admin-alert-banner" class="alert-banner hidden">
+      <div class="alert-content">
+        <span class="alert-icon">⚠️</span>
+        <div class="alert-text">
+          <strong>Venice Admin API Key Needed for Key Issuance:</strong> Currently using an Inference Key. Rate limits, live balances ($5.00), and inference are functional. To generate or revoke keys via API, enter your Venice Admin Key.
+        </div>
+      </div>
+      <button class="btn btn-sm btn-primary" onclick="openModal('modal-settings')">Set Admin Key</button>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <nav class="tab-bar">
+      <button class="tab-btn active" data-tab="tab-venice-keys">
+        <span class="tab-icon">🔑</span> Venice Keys
+      </button>
+      <button class="tab-btn" data-tab="tab-tg-bots">
+        <span class="tab-icon">🤖</span> Agent Telegram Bots (@BotFather)
+      </button>
+      <button class="tab-btn" data-tab="tab-inference">
+        <span class="tab-icon">⚡</span> Light Inference Sandbox
+      </button>
+      <button class="tab-btn" data-tab="tab-rate-limits">
+        <span class="tab-icon">📊</span> Model Rate Limits
+      </button>
+      <button class="tab-btn" data-tab="tab-settings">
+        <span class="tab-icon">⚙️</span> Vault & Settings
+      </button>
+    </nav>
+
+    <!-- Tab 1: Venice Keys -->
+    <main id="tab-venice-keys" class="tab-content active">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">Venice.ai API Keys</h2>
+          <p class="panel-desc">Manage, issue, budget, and deploy programmatic Venice keys for agents and services.</p>
+        </div>
+        <div class="panel-actions">
+          <button class="btn btn-primary" id="btn-open-create-key">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+            Issue New Key
+          </button>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <table class="data-table" id="table-venice-keys">
+          <thead>
+            <tr>
+              <th>Description / Label</th>
+              <th>Type</th>
+              <th>Consumption Limit</th>
+              <th>7-Day Usage</th>
+              <th>Created / Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-venice-keys">
+            <tr><td colspan="6" class="text-center text-muted">Loading Venice keys...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+
+    <!-- Tab 2: Agent Telegram Bots -->
+    <main id="tab-tg-bots" class="tab-content">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">Telegram Agent Keys & @BotFather</h2>
+          <p class="panel-desc">Manage dedicated Telegram bot tokens for respective agents, automated with @BotFather.</p>
+        </div>
+        <div class="panel-actions">
+          <button class="btn btn-secondary" id="btn-botfather-wizard">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            @BotFather Wizard
+          </button>
+          <button class="btn btn-primary" id="btn-add-agent-bot">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+            Register Agent Bot
+          </button>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <table class="data-table" id="table-tg-bots">
+          <thead>
+            <tr>
+              <th>Agent Name</th>
+              <th>Bot Username</th>
+              <th>Display Name</th>
+              <th>Status</th>
+              <th>Assigned Config</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-tg-bots">
+            <tr><td colspan="6" class="text-center text-muted">Loading agent bots...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+
+    <!-- Tab 3: Light Inference Sandbox -->
+    <main id="tab-inference" class="tab-content">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">Light Inference Sandbox</h2>
+          <p class="panel-desc">Test model connectivity, latency, and token consumption directly against Venice models.</p>
+        </div>
+      </div>
+
+      <div class="inference-layout">
+        <div class="inference-form card">
+          <div class="form-group">
+            <label>Model</label>
+            <select id="inf-model" class="input-field">
+              <option value="deepseek-v4-flash">deepseek-v4-flash (Fast & Cost Efficient)</option>
+              <option value="zai-org-glm-5-1">zai-org-glm-5-1</option>
+              <option value="gemini-3-6-flash">gemini-3-6-flash</option>
+              <option value="llama-3.3-70b">llama-3.3-70b</option>
+            </select>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Max Tokens: <span id="lbl-max-tokens">120</span></label>
+              <input type="range" id="inf-max-tokens" min="20" max="1000" step="20" value="120" class="range-slider">
+            </div>
+            <div class="form-group">
+              <label>Temperature: <span id="lbl-temp">0.7</span></label>
+              <input type="range" id="inf-temp" min="0" max="1.5" step="0.1" value="0.7" class="range-slider">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Prompt</label>
+            <textarea id="inf-prompt" class="input-field textarea-prompt" placeholder="Enter prompt to test...">Explain quantum computing in two sentences.</textarea>
+          </div>
+
+          <button class="btn btn-primary btn-block" id="btn-run-inference">
+            <span id="inf-btn-text">⚡ Run Inference</span>
+            <span id="inf-spinner" class="spinner hidden"></span>
+          </button>
+        </div>
+
+        <div class="inference-output card">
+          <div class="output-header">
+            <span class="output-title">OUTPUT & METRICS</span>
+            <div class="metrics-bar" id="inf-metrics">
+              <span class="badge badge-purple" id="metric-latency">Latency: -- ms</span>
+              <span class="badge badge-cyan" id="metric-tokens">Tokens: --</span>
+              <span class="badge badge-green" id="metric-cost">Cost: --</span>
+            </div>
+          </div>
+          <div class="output-box" id="inf-result">
+            <span class="text-muted">Response will appear here...</span>
+          </div>
+          <div class="reasoning-box hidden" id="inf-reasoning">
+            <div class="reasoning-title">Thinking / Reasoning:</div>
+            <div id="inf-reasoning-content"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Tab 4: Model Rate Limits -->
+    <main id="tab-rate-limits" class="tab-content">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">Model Rate Limits & Capacities</h2>
+          <p class="panel-desc">Real-time RPM and TPM limits reported by the Venice API for your account tier.</p>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <table class="data-table" id="table-rate-limits">
+          <thead>
+            <tr>
+              <th>Model ID</th>
+              <th>Rate Limits</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-rate-limits">
+            <tr><td colspan="2" class="text-center text-muted">Loading rate limits...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+
+    <!-- Tab 5: Vault Settings -->
+    <main id="tab-settings" class="tab-content">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">Vault Credentials & Settings</h2>
+          <p class="panel-desc">Configure your Venice Admin Key, Default Inference Key, and Telegram permissions.</p>
+        </div>
+      </div>
+
+      <div class="settings-grid">
+        <div class="card">
+          <h3 class="card-title">Venice Master Keys</h3>
+          <div class="form-group">
+            <label>Master Admin Key <span class="text-muted">(Needed for issuing and revoking keys)</span></label>
+            <input type="password" id="cfg-admin-key" class="input-field" placeholder="Enter Venice Admin Key...">
+          </div>
+          <div class="form-group">
+            <label>Inference API Key <span class="text-muted">(Used for chat and balances)</span></label>
+            <input type="password" id="cfg-inf-key" class="input-field" placeholder="Enter Venice Inference Key...">
+          </div>
+          <button class="btn btn-primary" id="btn-save-venice-keys">Save Venice Keys</button>
+        </div>
+
+        <div class="card">
+          <h3 class="card-title">Telegram Settings</h3>
+          <div class="form-group">
+            <label>Authorized Chat ID</label>
+            <input type="text" id="cfg-chat-id" class="input-field" placeholder="e.g. 123456789">
+          </div>
+          <div class="form-group">
+            <label>Target Agent Config File</label>
+            <input type="text" id="cfg-hermes-path" class="input-field" placeholder="e.g. config.yaml" readonly>
+          </div>
+          <button class="btn btn-secondary" id="btn-save-tg-settings">Update Settings</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Modal: Issue Venice Key -->
+  <div class="modal-overlay" id="modal-create-key">
+    <div class="modal card">
+      <div class="modal-header">
+        <h3 class="modal-title">Issue New Venice Key</h3>
+        <button class="modal-close" onclick="closeModal('modal-create-key')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Key Description / Label</label>
+          <input type="text" id="new-key-desc" class="input-field" placeholder="e.g. Worker-Audio-Agent">
+        </div>
+        <div class="form-group">
+          <label>Key Type</label>
+          <select id="new-key-type" class="input-field">
+            <option value="INFERENCE" selected>INFERENCE (Standard Model Access)</option>
+            <option value="ADMIN">ADMIN (Full Account & Key Management)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Consumption Limit (USD)</label>
+          <input type="number" id="new-key-limit" class="input-field" placeholder="e.g. 5.0 (Optional)" step="0.5">
+        </div>
+        <div class="form-group">
+          <label>Limit Period</label>
+          <select id="new-key-period" class="input-field">
+            <option value="MONTH" selected>Monthly Reset</option>
+            <option value="DAY">Daily Reset</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-create-key')">Cancel</button>
+        <button class="btn btn-primary" id="btn-confirm-create-key">Generate Key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Register Agent Bot -->
+  <div class="modal-overlay" id="modal-add-bot">
+    <div class="modal card">
+      <div class="modal-header">
+        <h3 class="modal-title">Register Agent Telegram Bot</h3>
+        <button class="modal-close" onclick="closeModal('modal-add-bot')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Agent Name</label>
+          <input type="text" id="new-bot-agent" class="input-field" placeholder="e.g. primary-agent, worker-node">
+        </div>
+        <div class="form-group">
+          <label>Telegram Bot Token (from @BotFather)</label>
+          <input type="text" id="new-bot-token" class="input-field" placeholder="e.g. 1234567890:ABC-DEF1234ghIkl-zyx57W2v1u123ew11">
+        </div>
+        <div class="form-group">
+          <label>Target Configuration File</label>
+          <input type="text" id="new-bot-config" class="input-field" placeholder="e.g. config.yaml">
+        </div>
+        <div class="form-group">
+          <label>Notes / Purpose</label>
+          <input type="text" id="new-bot-notes" class="input-field" placeholder="e.g. Dedicated agent communication bot">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-add-bot')">Cancel</button>
+        <button class="btn btn-primary" id="btn-confirm-add-bot">Verify & Register</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: BotFather Wizard -->
+  <div class="modal-overlay" id="modal-botfather-wizard">
+    <div class="modal card modal-lg">
+      <div class="modal-header">
+        <h3 class="modal-title">🧙 @BotFather Creation Wizard</h3>
+        <button class="modal-close" onclick="closeModal('modal-botfather-wizard')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="wizard-step">
+          <p>Follow these quick steps to generate a dedicated Telegram bot for your agent:</p>
+          <ol class="wizard-list" id="wizard-steps-list">
+            <li>1. Open <a href="https://t.me/BotFather" target="_blank" class="text-cyan">@BotFather</a> on Telegram.</li>
+            <li>2. Send command: <code>/newbot</code></li>
+            <li>3. Enter display name for your bot.</li>
+            <li>4. Enter username ending in <code>_bot</code>.</li>
+            <li>5. Copy the generated HTTP API token.</li>
+          </ol>
+        </div>
+        <div class="form-group">
+          <label>Quick Link</label>
+          <a href="https://t.me/BotFather?start=newbot" target="_blank" class="btn btn-secondary btn-block">🚀 Open @BotFather in Telegram</a>
+        </div>
+        <hr class="divider">
+        <div class="form-group">
+          <label>Paste Generated Token Here</label>
+          <input type="text" id="wizard-token-input" class="input-field" placeholder="Paste bot token here...">
+        </div>
+        <div class="form-group">
+          <label>Assign to Agent</label>
+          <input type="text" id="wizard-agent-name" class="input-field" placeholder="e.g. primary-agent">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-botfather-wizard')">Close</button>
+        <button class="btn btn-primary" id="btn-wizard-register">Validate & Save Bot</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

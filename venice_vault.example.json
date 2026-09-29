@@ -1,0 +1,50 @@
+{
+  "version": "1.0",
+  "venice": {
+    "base_url": "https://api.venice.ai/api/v1",
+    "admin_key": "your-venice-admin-key",
+    "inference_key": "your-venice-inference-key",
+    "default_model": "deepseek-v4-flash",
+    "keys": [
+      {
+        "id": "example-key-id-01",
+        "description": "Worker Agent Key",
+        "apiKeyType": "INFERENCE",
+        "consumptionLimits": {
+          "usd": 5.0
+        },
+        "limitPeriod": "MONTH",
+        "createdAt": "2026-09-28T00:00:00.000Z"
+      }
+    ]
+  },
+  "telegram": {
+    "master_bot_token": "1234567890:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+    "authorized_chat_id": "123456789",
+    "mtproto": {
+      "api_id": "",
+      "api_hash": "",
+      "phone": "",
+      "session_file": "botfather_user.session"
+    },
+    "agent_bots": {
+      "primary-agent": {
+        "agent_name": "primary-agent",
+        "bot_token": "1234567890:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+        "bot_id": 1234567890,
+        "username": "example_agent_bot",
+        "first_name": "Agent Controller",
+        "config_path": "config.yaml",
+        "created_at": "2026-09-28T00:00:00.000Z",
+        "notes": "Main agent controller bot"
+      }
+    }
+  },
+  "deployments": {
+    "primary-agent": {
+      "config_path": "config.yaml",
+      "venice_key_field": "model.api_key",
+      "tg_token_field": "channels.telegram.bot_token"
+    }
+  }
+}
