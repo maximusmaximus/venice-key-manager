@@ -116,6 +116,65 @@ def main():
     p_auth_revoke = auth_sub.add_parser("revoke-token", help="Revoke an access token")
     p_auth_revoke.add_argument("token", help="Token string to revoke")
 
+    # 12. Project Allocations
+    p_proj = subparsers.add_parser("project", help="Manage external inference projects and allocations")
+    proj_sub = p_proj.add_subparsers(dest="project_action", required=True)
+    p_proj_list = proj_sub.add_parser("list", help="List all projects and live spend")
+    p_proj_list.add_argument("--json", action="store_true", help="Output raw JSON")
+    p_proj_create = proj_sub.add_parser("create", help="Create a new project allocation")
+    p_proj_create.add_argument("--name", "-n", required=True, help="Project name")
+    p_proj_create.add_argument("--desc", default="", help="Description")
+    p_proj_create.add_argument("--daily-usd", "-u", type=float, default=1.00, help="Daily spend limit in USD")
+    p_proj_create.add_argument("--weekly-usd", type=float, help="Weekly spend limit in USD")
+    p_proj_create.add_argument("--sub-cap", type=float, default=0.25, help="Default sub-key daily cap in USD (default: 0.25)")
+    p_proj_create.add_argument("--tier", choices=["xs", "s", "m", "l", "xl"], default="xl", help="Max model tier")
+    p_proj_update = proj_sub.add_parser("update", help="Update project limits or status")
+    p_proj_update.add_argument("--id", required=True, help="Project ID")
+    p_proj_update.add_argument("--name", help="New project name")
+    p_proj_update.add_argument("--daily-usd", type=float, help="New daily limit")
+    p_proj_update.add_argument("--sub-cap", type=float, help="New default sub-key cap")
+    p_proj_update.add_argument("--tier", choices=["xs", "s", "m", "l", "xl"], help="New max tier")
+    p_proj_update.add_argument("--status", choices=["active", "paused"], help="Status")
+    p_proj_delete = proj_sub.add_parser("delete", help="Delete a project and revoke its keys")
+    p_proj_delete.add_argument("--id", required=True, help="Project ID to delete")
+
+    # 13. External Keys & Sub-Keys
+    p_ext = subparsers.add_parser("extkey", help="Manage external use keys and delegated sub-keys")
+    ext_sub = p_ext.add_subparsers(dest="extkey_action", required=True)
+    p_ext_list = ext_sub.add_parser("list", help="List external keys")
+    p_ext_list.add_argument("--project", "-p", help="Filter by project ID")
+    p_ext_list.add_argument("--json", action="store_true", help="Output raw JSON")
+    p_ext_create = ext_sub.add_parser("create", help="Create an external key tied to a project")
+    p_ext_create.add_argument("--project", "-p", required=True, help="Target project ID")
+    p_ext_create.add_argument("--name", "-n", required=True, help="Agent or client name")
+    p_ext_create.add_argument("--daily-usd", "-u", type=float, help="Daily spend limit (defaults to project sub-key default: 0.25)")
+    p_ext_create.add_argument("--period", choices=["DAY", "WEEK"], default="DAY", help="Limit period")
+    p_ext_create.add_argument("--tier", choices=["xs", "s", "m", "l", "xl"], default="xl", help="Max model tier")
+    p_ext_create.add_argument("--prefix", default="vkm_ext_", help="Token prefix")
+    p_ext_create.add_argument("--notes", default="", help="Notes or owner info")
+    p_ext_subkey = ext_sub.add_parser("subkey", help="Delegate a sub-key from a parent key or pairing token")
+    p_ext_subkey.add_argument("--parent", required=True, help="Parent external key token, ID, or pairing code")
+    p_ext_subkey.add_argument("--name", "-n", required=True, help="Sub-key / sub-agent name")
+    p_ext_subkey.add_argument("--amount", "-a", type=float, default=0.25, help="Allocated amount in USD (default: 0.25)")
+    p_ext_subkey.add_argument("--period", choices=["DAY", "WEEK"], default="DAY", help="Period")
+    p_ext_subkey.add_argument("--tier", choices=["xs", "s", "m", "l", "xl"], help="Max model tier")
+    p_ext_subkey.add_argument("--notes", default="", help="Notes")
+    p_ext_modify = ext_sub.add_parser("modify", help="Modify an external key allocation")
+    p_ext_modify.add_argument("--id", required=True, help="External key ID")
+    p_ext_modify.add_argument("--name", help="New name")
+    p_ext_modify.add_argument("--daily-usd", type=float, help="New daily limit")
+    p_ext_modify.add_argument("--tier", choices=["xs", "s", "m", "l", "xl"], help="New max tier")
+    p_ext_modify.add_argument("--status", choices=["active", "paused", "revoked"], help="Status")
+    p_ext_revoke = ext_sub.add_parser("revoke", help="Revoke an external key or sub-key")
+    p_ext_revoke.add_argument("--id", required=True, help="External key ID or token string to revoke")
+
+    # 14. Gateway Configuration
+    p_gw = subparsers.add_parser("gateway", help="Cloudflare DNS Gateway status and configuration")
+    gw_sub = p_gw.add_subparsers(dest="gateway_action", required=True)
+    p_gw_info = gw_sub.add_parser("info", help="View Cloudflare gateway URL and tier mapping")
+    p_gw_set = gw_sub.add_parser("set-url", help="Set the public Cloudflare gateway DNS URL")
+    p_gw_set.add_argument("--url", required=True, help="Public URL (e.g. https://venice-gateway.yourdomain.com)")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -310,6 +369,141 @@ def main():
         elif args.auth_action == "revoke-token":
             ok = state_store.revoke_auth_token(args.token)
             print(f"{'✅ Revoked' if ok else '❌ Token not found'}")
+
+    elif args.command == "project":
+        if args.project_action == "list":
+            projects = state_store.list_projects()
+            if args.json:
+                print(json.dumps(projects, indent=2))
+            else:
+                print("\n📁 VENICE INFERENCE ALLOCATION PROJECTS")
+                print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                print(f"{'Project Name':<28} {'Daily Limit':<14} {'Sub-Key Cap':<14} {'Max Tier':<10} {'Today Spend':<14} {'Keys'}")
+                print("─" * 90)
+                for p in projects:
+                    d_lim = f"${p['daily_limit_usd']:.2f}"
+                    sub_lim = f"${p.get('default_sub_key_daily_usd', 0.25):.2f}"
+                    tier = p.get('max_model_tier', 'xl').upper()
+                    spent = f"${p.get('current_day_spend', 0.0):.4f}"
+                    keys_cnt = p.get('connected_keys_count', 0)
+                    print(f"{p['name'][:26]:<28} {d_lim:<14} {sub_lim:<14} {tier:<10} {spent:<14} {keys_cnt}")
+                print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+
+        elif args.project_action == "create":
+            p = state_store.create_project(
+                name=args.name,
+                description=args.desc,
+                daily_limit_usd=args.daily_usd,
+                weekly_limit_usd=args.weekly_usd,
+                default_sub_key_daily_usd=args.sub_cap,
+                max_model_tier=args.tier,
+            )
+            print(f"\n🎉 Project Created: {p['name']} (ID: {p['id']})")
+            print(f"• Daily Spend Limit:   ${p['daily_limit_usd']:.2f} USD")
+            print(f"• Default Sub-Key Cap: ${p['default_sub_key_daily_usd']:.2f} USD / day")
+            print(f"• Max Permitted Tier:  {p['max_model_tier'].upper()}\n")
+
+        elif args.project_action == "update":
+            updates = {}
+            if args.name: updates["name"] = args.name
+            if args.daily_usd is not None: updates["daily_limit_usd"] = args.daily_usd
+            if args.sub_cap is not None: updates["default_sub_key_daily_usd"] = args.sub_cap
+            if args.tier: updates["max_model_tier"] = args.tier
+            if args.status: updates["status"] = args.status
+            res = state_store.update_project(args.id, **updates)
+            if res:
+                print(f"✅ Project '{args.id}' updated successfully.")
+            else:
+                print(f"❌ Project '{args.id}' not found.")
+
+        elif args.project_action == "delete":
+            ok = state_store.delete_project(args.id)
+            print(f"{'✅ Project deleted' if ok else '❌ Cannot delete project (not found or default)'}")
+
+    elif args.command == "extkey":
+        if args.extkey_action == "list":
+            keys = state_store.list_external_keys(project_id=args.project)
+            if args.json:
+                print(json.dumps(keys, indent=2))
+            else:
+                print("\n🔑 EXTERNAL KEYS & DELEGATED SUB-KEYS")
+                print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                print(f"{'Key Name':<24} {'Project':<20} {'Type':<12} {'Tier':<6} {'Daily Cap':<12} {'Spent Today':<14} {'Token Last 6'}")
+                print("─" * 100)
+                for k in keys:
+                    d_lim = f"${k.get('daily_limit_usd', 0.25):.2f}"
+                    spent = f"${k.get('current_period_spend', 0.0):.4f}"
+                    tier = k.get('max_model_tier', 'xl').upper()
+                    last6 = k.get('token', '')[-6:] if k.get('token') else '--'
+                    p_name = k.get('project_name', k.get('project_id', ''))[:18]
+                    print(f"{k['name'][:22]:<24} {p_name:<20} {k.get('key_type', 'EXT'):<12} {tier:<6} {d_lim:<12} {spent:<14} ...{last6}")
+                print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+
+        elif args.extkey_action == "create":
+            k = state_store.create_external_key(
+                project_id=args.project,
+                name=args.name,
+                daily_limit_usd=args.daily_usd,
+                limit_period=args.period,
+                max_model_tier=args.tier,
+                prefix=args.prefix,
+                notes=args.notes,
+            )
+            gw_url = state_store.get_cloudflare_gateway_url() or "http://localhost:8660"
+            print(f"\n🎉 External Key Created: {k['name']} (ID: {k['id']})")
+            print(f"• Project ID:        {k['project_id']}")
+            print(f"• Daily Spend Limit: ${k['daily_limit_usd']:.2f} USD")
+            print(f"• Max Permitted Tier:{k['max_model_tier'].upper()}")
+            print(f"• Key Token:         {k['token']}")
+            print(f"\n⚡ cURL Test Snippet:")
+            print(f"curl -X POST {gw_url}/v1/chat/completions \\\n  -H 'Authorization: Bearer {k['token']}' \\\n  -H 'Content-Type: application/json' \\\n  -d '{{\"model\": \"{k['max_model_tier']}\", \"messages\": [{{\"role\": \"user\", \"content\": \"Hello!\"}}]}}'\n")
+
+        elif args.extkey_action == "subkey":
+            sub = state_store.create_sub_key(
+                parent_key_or_token=args.parent,
+                name=args.name,
+                amount_usd=args.amount,
+                period=args.period,
+                max_model_tier=args.tier,
+                notes=args.notes,
+            )
+            print(f"\n🌱 Delegated Sub-Key Created: {sub['name']} (ID: {sub['id']})")
+            print(f"• Parent Key ID:     {sub.get('parent_key_id')}")
+            print(f"• Allocation Limit:  ${sub['daily_limit_usd']:.2f} USD / {sub['limit_period']}")
+            print(f"• Max Model Tier:    {sub['max_model_tier'].upper()}")
+            print(f"• Sub-Key Token:     {sub['token']}\n")
+
+        elif args.extkey_action == "modify":
+            updates = {}
+            if args.name: updates["name"] = args.name
+            if args.daily_usd is not None: updates["daily_limit_usd"] = args.daily_usd
+            if args.tier: updates["max_model_tier"] = args.tier
+            if args.status: updates["status"] = args.status
+            res = state_store.update_external_key(args.id, **updates)
+            print(f"{'✅ External key updated' if res else '❌ Key not found'}")
+
+        elif args.extkey_action == "revoke":
+            ok = state_store.revoke_external_key(args.id)
+            print(f"{'✅ External key revoked' if ok else '❌ Key not found'}")
+
+    elif args.command == "gateway":
+        if args.gateway_action == "info":
+            from .models import MODEL_TIER_MAPPING, MODEL_TIER_ORDER
+            gw_url = state_store.get_cloudflare_gateway_url() or "http://localhost:8660"
+            print("\n🌐 CLOUDFLARE DNS GATEWAY STATUS")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            print(f"  Public Cloudflare URL:  {state_store.get_cloudflare_gateway_url() or '(not configured, defaults to host)'}")
+            print(f"  Effective Gateway URL:  {gw_url}")
+            print(f"  Total Projects:         {len(state_store.list_projects())}")
+            print(f"  Total External Keys:    {len(state_store.list_external_keys())}")
+            print("\n  MODEL SIZING TIERS (xs to xl):")
+            for t in MODEL_TIER_ORDER:
+                info = MODEL_TIER_MAPPING[t]
+                print(f"  • {t.upper():<3} : {info['default_model']:<18} ({info['label']})")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+        elif args.gateway_action == "set-url":
+            state_store.set_cloudflare_gateway_url(args.url)
+            print(f"✅ Cloudflare Gateway URL set to: {state_store.get_cloudflare_gateway_url()}")
 
 
 if __name__ == "__main__":
