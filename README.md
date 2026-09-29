@@ -1,187 +1,285 @@
-# ⚡ Venice.ai Key Manager & Telegram Agent Suite
+# ⚡ Venice Key Manager
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python: 3.7+](https://img.shields.io/badge/Python-3.7+-green.svg)](https://python.org)
-[![Model Context Protocol](https://img.shields.io/badge/MCP-2024--11--05-blueviolet.svg)](https://modelcontextprotocol.io)
+[![Python: 3.8+](https://img.shields.io/badge/Python-3.8%2B-brightgreen.svg)](https://www.python.org/)
+[![Model Context Protocol](https://img.shields.io/badge/MCP-Compatible-blueviolet.svg)](https://modelcontextprotocol.io/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688.svg)](https://fastapi.tiangolo.com/)
 
-An autonomous key management, real-time telemetry, and deployment control plane for **Venice.ai API keys** and **Telegram Agent Bots** (`@BotFather` integration). Engineered with full **Model Context Protocol (MCP)** server capabilities, a cyber dark-mode web dashboard, interactive Telegram bot controller, and Podman / Docker container support.
+**Venice Key Manager** is an enterprise-grade control plane, Model Context Protocol (MCP) server, reactive web dashboard, and OpenAI-compatible inference gateway for managing **Venice.ai** API keys, project allocations, confidential hardware enclave (E2EE) models, and keyed gated inference across autonomous AI agent swarms and external client services.
 
-Built directly against the official Venice.ai REST API specifications to provide granular governance over autonomous AI agent fleets, developer teams, and production integrations.
-
----
-
-## 🏛️ Architecture Overview
-
-```
-                      +---------------------------------------+
-                      |      Venice.ai API & Telegram API      |
-                      +---------------------------------------+
-                                          ^
-                                          |
-                      +---------------------------------------+
-                      |       Unified Core Engine & Vault     |
-                      |  - VeniceClient (Balances/Keys/Infer) |
-                      |  - TelegramAgentManager (@BotFather)  |
-                      |  - ConfigDeployer (YAML/.env sync)    |
-                      |  - Local Vault (venice_vault.json)    |
-                      +---------------------------------------+
-                                          |
-         +--------------------------------+--------------------------------+
-         |                                |                                |
-         v                                v                                v
-+-------------------+            +-------------------+            +-------------------+
-|   Web Dashboard   |            |   Telegram Bot    |            |    MCP Server     |
-|   (Port 8844)     |            |  Inline Buttons   |            |  JSON-RPC Stdio   |
-| Live Stats & Sandbox           | Light Inference   |            | For Antigravity   |
-+-------------------+            +-------------------+            +-------------------+
-```
+Built directly against the official Venice.ai REST API specifications, Venice Key Manager provides granular governance, real-time telemetry, and delegated sub-key budgets with zero vendor lock-in.
 
 ---
 
-## 🚀 Key Features
+## 🚀 Highlights & Capabilities
 
-* **🔑 Venice.ai Key Lifecycle & Budget Governance**:
-  * Distinguishes and supports both **`INFERENCE`** and **`ADMIN`** keys.
-  * Issue programmatic keys with daily/monthly budget caps in USD and custom expiration dates.
-  * Programmatic key revocation (`DELETE /api/v1/api_keys/{id}`) and 1-click rotation/cycling.
-  * Real-time querying of account balances (USD, DIEM, bundled credits), subscription tier, and epoch countdown.
-* **⚡ Light Inference Sandbox**:
-  * Test prompts directly against Venice models (`deepseek-v4-flash`, `zai-org-glm-5-1`, `gemini-3-6-flash`, etc.).
-  * Real-time token breakdown (prompt, completion, total), dollar cost, and latency (ms).
-  * Expandable model reasoning / thinking inspection.
-* **🤖 Telegram Agent Bot & `@BotFather` Manager**:
-  * Manage dedicated bot tokens mapped to each respective agent or service.
-  * Live token validation via Telegram's `getMe` API.
-  * **Automated `@BotFather` Mode**: Communicates directly with `@BotFather` via MTProto client to automate bot creation without manual copy-pasting.
-  * **Guided Wizard Mode**: Generates 1-click deep links to `@BotFather` with prepopulated commands for instant generation and linking.
-  * Verification pings: Sends test pings to your Telegram chat to confirm connectivity.
-* **🚀 Configuration Deployment**:
-  * 1-click safe deployment of active Venice keys or bot tokens to target configuration files (e.g. `config.yaml` or `.env`).
-  * Automatically creates timestamped `.bak` backups before modifying any files.
-* **🔌 Full Model Context Protocol (MCP) Server**:
-  * Exposes 12 native tools over JSON-RPC 2.0 Stdio transport for AI agents in Antigravity, Claude Desktop, or Cursor.
-  * Zero heavy external dependencies; starts in milliseconds.
-* **🐳 Container & Quadlet Ready**:
-  * Includes `Dockerfile`, `docker-compose.yml`, and Podman Quadlet unit (`quadlets/venice-key-manager.container`) for headless fleet deployment.
+### 🌐 Keyed Gated Inference via Cloudflare DNS
+* **OpenAI-Compatible Gateway**: External services, multi-agent orchestrators, and client applications can target standard OpenAI SDK endpoints (`/v1/chat/completions`, `/v1/models`, `/v1/allocation`) proxied directly to Venice.ai.
+* **Cloudflare DNS Integration**: Connect via public Cloudflare tunnels or custom domain DNS with end-to-end TLS. Configure your public gateway endpoint directly from the dashboard.
+* **Universal Authentication**: Supports `Authorization: Bearer <token>`, `X-API-Key: <token>`, `X-Pairing-Code: <code>`, and URL query tokens.
+
+### 🧠 Model Tier Sizing Hierarchy (`xs` to `xl`)
+Clients can request models by size tier or explicit model identifier:
+| Tier | Label & Parameter Class | Default Venice Model | Input / Output (per 1M) | Best Use Cases |
+| :---: | :--- | :--- | :---: | :--- |
+| **`xs`** | **Extra Small (Ultra Fast / Low Cost)** | `llama-3.2-3b` | \$0.05 / \$0.10 | Heartbeat checks, routing, classification, ultra-low latency tasks |
+| **`s`** | **Small (High Speed / Efficient)** | `deepseek-v4-flash` | \$0.15 / \$0.60 | High-throughput agent loops, drafting, summarization |
+| **`m`** | **Medium (Balanced Intelligence)** | `llama-3.3-70b` | \$0.40 / \$1.20 | Multi-step tool execution, coding, structured data analysis |
+| **`l`** | **Large (Deep Reasoning & Math)** | `deepseek-r1` | \$1.50 / \$4.00 | Complex algorithmic reasoning, STEM problem solving |
+| **`xl`** | **Extra Large (Flagship & Enclave)** | `llama-3.1-405b` | \$3.00 / \$8.00 | Frontier 405B capability, confidential hardware enclave (E2EE) models |
+
+* **Strict Tier Enforcement**: Keys configured with a maximum tier ceiling (e.g. `s`) will cleanly reject higher-tier requests (e.g. `m` or `xl`) with descriptive HTTP 403 errors and permitted tier lists.
+
+### 📁 Projects & Dynamic Inference Allocations
+* **Project Fleet Management**: Group external services, client teams, or agent swarms into dedicated project pools.
+* **Dual Spend Ceilings**: Set daily and weekly budget ceilings in USD per project and per connected key.
+* **Rolling Reset Windows**: Automatically resets daily spend at 00:00 UTC and weekly spend on ISO calendar weeks without external cron jobs.
+* **On-the-Fly Adjustments**: Admins can increase, decrease, pause, or resume project allocations and agent limits dynamically from the dashboard.
+
+### 🌱 Delegated Sub-Keys ($0.25 Default Cap)
+* External users or parent agents can spawn child sub-keys (`/v1/subkeys`) to safely delegate inference to sub-agents or third-party tools.
+* **Enforced Default Rule**: **Unless explicitly specified by an admin, all sub-keys default to \$0.25 USD per project per day**.
+* Sub-keys automatically inherit the parent project scope, are capped by parent tier restrictions, and cannot exceed parent daily allowances.
+
+### 📊 Reactive Web Dashboard (Port 8660)
+* Dark-mode terminal/obsidian UI with real-time KPI metrics, spend progress bars, and countdown timers.
+* Dedicated **🌐 External Allocations** tab for project management, external key minting, and cURL / Python code snippets.
+* **Ubiquitous Copy Buttons**: 1-click clipboard copy for keys, tokens, IDs, .env files, and cURL snippets.
+* **Cryptographic Access Gate**: Web interface is locked behind a pairing token gate and cannot be loaded without an authenticated session.
+* **Low-USD Balance Warning System**: Configurable global alert threshold (\$0.20 USD default) and custom per-key override thresholds.
+
+### 🔌 Full Model Context Protocol (MCP) Server
+Exposes 20+ specialized tools and resources over stdio / JSON-RPC 2.0 for Claude Desktop, Cursor, Antigravity, and Hermes Agent.
 
 ---
 
-## 📦 Quickstart
+## 🏗️ Architecture
 
-### 1. Installation
-Clone the repository and install requirements:
-```bash
-git clone https://github.com/maximusmaximus/venice-key-manager.git
-cd venice-key-manager
-pip install -r requirements.txt
-```
+```mermaid
+flowchart TD
+    subgraph Clients["External Clients & Agent Swarms"]
+        ExtService["🌐 External Services & Apps\n(cURL / Python OpenAI SDK)"]
+        SubAgent["🤖 Delegated Sub-Agents\n(Sub-Keys / $0.25 Cap)"]
+        MCPAgents["🔌 MCP AI Assistants\n(Claude, Cursor, Antigravity, Hermes)"]
+        Browser["💻 Admin Web Dashboard\n(Port 8660)"]
+    end
 
-### 2. Configuration
-Copy the template configuration file:
-```bash
-cp .env.example .env
-```
-Fill in your credentials or start the server directly; credentials can also be entered through the browser dashboard:
-- `VENICE_API_KEY`: Your Venice.ai inference or admin key.
-- `VENICE_ADMIN_KEY`: (Optional) Required for creating and deleting keys via API.
-- `TELEGRAM_BOT_TOKEN`: (Optional) Your Telegram bot token.
-- `TELEGRAM_CHAT_ID`: (Optional) Your private Telegram user chat ID for security lock.
+    subgraph GatewayLayer["Cloudflare DNS & Gateway Proxy"]
+        CF["Cloudflare DNS / Tunnel\n(Public Gateway Endpoint)"]
+        AuthGate["Key & Pairing Verification\n(Tier Sizing xs-xl, Budget Caps)"]
+        Meter["Usage Metering & Spend Tracker\n(Rolling Daily/Weekly Resets)"]
+    end
 
-### 3. Launching Services
+    subgraph Core["Venice Key Manager Engine"]
+        FastAPI["FastAPI Control Plane\n(/v1/* & /api/*)"]
+        MCPServer["MCP JSON-RPC 2.0 Server"]
+        StateStore["Atomic State Store\n(Projects, Keys, Sub-Keys, Settings)"]
+        Client["Async Venice.ai REST Client"]
+    end
 
-#### Run Web Dashboard & Telegram Bot Concurrently:
-```bash
-python run.py --all
-```
-Open your browser to: **[http://localhost:8844](http://localhost:8844)**
+    subgraph VeniceCloud["Venice.ai Cloud API (v1)"]
+        VeniceInference["/api/v1/chat/completions\n(3B, Flash, 70B, R1, 405B, E2EE)"]
+        VeniceKeys["/api/v1/api_keys\n(Consumption Limits & Balances)"]
+    end
 
-#### Run Only the Web Dashboard:
-```bash
-python run.py --web --port 8844
-```
+    ExtService -->|OpenAI v1 format| CF
+    SubAgent -->|Delegated Sub-Key| CF
+    CF --> AuthGate
+    AuthGate --> FastAPI
+    MCPAgents --> MCPServer
+    Browser --> FastAPI
 
-#### Run Only the Telegram Bot Daemon:
-```bash
-python run.py --telegram
+    FastAPI --> AuthGate
+    AuthGate --> Meter
+    Meter --> StateStore
+    FastAPI --> Client
+    MCPServer --> StateStore
+    MCPServer --> Client
+
+    Client --> VeniceInference
+    Client --> VeniceKeys
 ```
 
 ---
 
-## 💻 CLI Commands
+## 🔌 MCP Server Tools Reference
 
-Run terminal operations directly using `run.py`:
+Venice Key Manager provides comprehensive MCP tool integration:
 
-```bash
-# Check live Venice balance, tier, and next reset epoch
-python run.py venice balance
+### Project & Inference Allocation Tools
+| MCP Tool | Description | Key Arguments |
+| :--- | :--- | :--- |
+| `venice_list_projects` | List all project allocation pools with spend, caps, and connected keys. | *(none)* |
+| `venice_create_project` | Create a new project allocation for external services or agent swarms. | `name`, `daily_limit_usd`, `max_model_tier`, `default_sub_key_daily_usd` |
+| `venice_update_project` | Modify spend ceilings, model tier, or status of an existing project. | `project_id`, `daily_limit_usd`, `max_model_tier`, `status` |
 
-# List active keys
-python run.py venice keys
+### External Key & Sub-Key Tools
+| MCP Tool | Description | Key Arguments |
+| :--- | :--- | :--- |
+| `venice_list_external_keys` | List external client keys, sub-keys, and parent projects. | `project_id` (optional) |
+| `venice_create_external_key` | Generate an external use key tied to a project with tier and daily limit. | `project_id`, `name`, `daily_limit_usd`, `max_model_tier` |
+| `venice_create_sub_key` | Delegate a sub-key for an agent (defaults to **\$0.25/day**). | `parent_key_or_token`, `name`, `amount_usd` (default 0.25), `period` |
+| `venice_modify_external_key_allocation` | Adjust spend limits, model tier, or active/paused status. | `key_id`, `daily_limit_usd`, `max_model_tier`, `status` |
+| `venice_revoke_external_key` | Revoke an external key, immediately blocking inference access. | `key_id_or_token` |
 
-# Test light inference with latency and token metrics
-python run.py venice infer "Explain quantum computing in 10 words"
+### Gateway & Inference Tools
+| MCP Tool | Description | Key Arguments |
+| :--- | :--- | :--- |
+| `venice_get_gateway_info` | Return Cloudflare gateway URL, tier mapping (`xs`..`xl`), and integration code. | *(none)* |
+| `venice_set_cloudflare_gateway_url` | Set or update the public Cloudflare DNS gateway endpoint. | `url` |
+| `venice_gateway_chat_completion` | Execute gated inference with tier enforcement (`xs` to `xl`) and live metering. | `auth_token`, `model`, `prompt`, `max_tokens` |
 
-# Deploy active Venice key to config file
-python run.py venice deploy
-
-# List registered agent Telegram bots
-python run.py tg list
-
-# Send verification ping from an agent bot
-python run.py tg ping
-
-# Generate @BotFather creation steps for a new agent
-python run.py tg wizard worker-agent
-```
+### Core Key Management & Telemetry Tools
+| MCP Tool | Description | Key Arguments |
+| :--- | :--- | :--- |
+| `venice_list_keys` | List native Venice API keys with spend and low-balance alerts. | `category`, `only_low_balance` |
+| `venice_create_key` | Mint a native Venice API key with spending caps and reset periods. | `description`, `daily_usd`, `limit_period`, `category` |
+| `venice_cycle_key` | Rotate/cycle an existing API key, transferring limits to new key. | `key_id`, `revoke_old`, `new_daily_usd` |
+| `venice_update_key_limit` | Update spend limit or category of a Venice key. | `key_id`, `daily_usd`, `limit_period` |
+| `venice_revoke_key` | Permanently delete a Venice API key. | `key_id` |
+| `venice_get_account_balance` | Fetch real-time USD/DIEM account balances and epoch resets. | *(none)* |
+| `venice_list_models` | Query available models with E2EE hardware enclave filter. | `privacy_filter`, `query` |
+| `venice_test_inference` | Run a quick lightweight health verification benchmark. | `prompt`, `model`, `api_key` |
+| `venice_daily_report` | Generate formatted daily operations report and dispatch to Telegram. | `send_telegram`, `chat_id` |
+| `venice_create_batch_codes` | Mint batch of pairing codes with custom prefix. | `prefix`, `count`, `ttl_hours` |
+| `venice_create_batch_keys` | Mint batch of Venice API keys with formatted labels. | `prefix`, `count`, `daily_usd` |
 
 ---
 
-## 🔌 Model Context Protocol (MCP) Integration
+## 💻 Client Integration Examples
 
-To connect this manager to **Antigravity**, **Claude Desktop**, or any MCP-compliant client, register the server in your MCP configuration file (`mcp_config.json`):
+### 1. cURL Gated Inference via Cloudflare DNS
 
+```bash
+curl -X POST https://venice-gateway.yourdomain.com/v1/chat/completions \
+  -H "Authorization: Bearer vkm_ext_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "xs",
+    "messages": [
+      {"role": "system", "content": "You are a concise AI assistant."},
+      {"role": "user", "content": "Explain zero-data retention in one sentence."}
+    ],
+    "temperature": 0.3
+  }'
+```
+
+### 2. Python OpenAI SDK
+
+```python
+from openai import OpenAI
+
+# Configure client pointing to your Venice Key Manager Gateway
+client = OpenAI(
+    base_url="https://venice-gateway.yourdomain.com/v1",
+    api_key="vkm_ext_YOUR_KEY",  # Or pairing code token
+)
+
+# Use model size tiers: "xs", "s", "m", "l", "xl"
+response = client.chat.completions.create(
+    model="xs",
+    messages=[{"role": "user", "content": "Ping test."}],
+    max_tokens=50,
+)
+
+print(response.choices[0].message.content)
+```
+
+### 3. Check Allocation Status
+
+```bash
+curl -s -H "Authorization: Bearer vkm_ext_YOUR_KEY" \
+  https://venice-gateway.yourdomain.com/v1/allocation | jq .
+```
+Response:
 ```json
 {
-  "mcpServers": {
-    "venice-key-manager": {
-      "command": "python",
-      "args": [
-        "/path/to/venice-key-manager/run.py",
-        "--mcp"
-      ],
-      "env": {
-        "PYTHONUNBUFFERED": "1"
-      }
-    }
-  }
+  "key_name": "Hermes Autonomous Agent",
+  "project_id": "proj_swarm_alpha",
+  "project_name": "Autonomous Agent Fleet",
+  "key_type": "ADMIN_EXTERNAL",
+  "daily_limit_usd": 0.50,
+  "spent_today_usd": 0.0412,
+  "remaining_today_usd": 0.4588,
+  "limit_period": "DAY",
+  "max_model_tier": "m",
+  "status": "active"
 }
 ```
 
-### Available MCP Tools:
-| Tool Name | Description |
-| :--- | :--- |
-| `venice_get_balances_and_tier` | Real-time USD, DIEM, bundled credits, and tier info. |
-| `venice_list_rate_limits` | Retrieves model RPM/TPM constraints and epoch reset timer. |
-| `venice_list_keys` | Lists all active Venice API keys (requires admin key). |
-| `venice_create_key` | Generates an INFERENCE or ADMIN key with optional budget cap. |
-| `venice_revoke_key` | Destroys an API key on Venice.ai by ID. |
-| `venice_deploy_key` | Deploys a key directly into an agent's configuration file. |
-| `venice_test_inference` | Runs light inference against Venice models with latency/cost metrics. |
-| `tg_list_agent_bots` | Lists all registered agent bot tokens and their statuses. |
-| `tg_register_agent_bot` | Validates token via `getMe`, assigns it to an agent, and saves to vault. |
-| `tg_deploy_agent_bot` | Deploys an agent's bot token to its assigned configuration file. |
-| `tg_test_agent_bot` | Sends a verification test ping from an agent bot to your chat. |
-| `tg_botfather_wizard` | Returns step-by-step guidance and deep links for creating a bot with `@BotFather`. |
+### 4. Delegate Sub-Key (Defaults to $0.25/day)
+
+```bash
+curl -X POST https://venice-gateway.yourdomain.com/v1/subkeys \
+  -H "Authorization: Bearer vkm_ext_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Sub-Agent Web Researcher"
+  }'
+```
+
+---
+
+## ⚙️ Installation & Deployment
+
+### Local / Server Installation
+
+```bash
+# 1. Clone repository
+git clone https://github.com/maximusmaximus/venice-key-manager.git
+cd venice-key-manager
+
+# 2. Install package
+pip install -e .
+
+# 3. Configure environment
+cp .env.example .env
+# Set VENICE_API_KEY=your_venice_admin_key in .env
+
+# 4. Run tests
+pytest -v
+
+# 5. Launch web dashboard & gateway
+venice-key-manager web --host 0.0.0.0 --port 8660
+```
+
+### Systemd Service Setup
+
+```ini
+[Unit]
+Description=Venice Key Manager Real-Time Dashboard & API Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=molt
+WorkingDirectory=/opt/venice-key-manager
+ExecStart=/usr/bin/venice-key-manager web --host 0.0.0.0 --port 8660
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Reload and start:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now venice-key-manager.service
+```
 
 ---
 
 ## 🔒 Security & Privacy Guarantees
 
-- **Zero Secret Leaks**: All local keys and credentials are stored strictly in `venice_vault.json`, which is excluded by `.gitignore` and never committed to version control.
-- **Telegram Access Control**: The Telegram controller strictly checks `TELEGRAM_CHAT_ID`, rejecting any unapproved senders.
-- **Atomic File Backups**: All configuration file edits create safe timestamped `.bak` backups before writing changes.
+* **Zero Plaintext Secrets in Git**: Secret keys, environment files, and credentials are never checked into version control.
+* **Single-Reveal API Keys**: Native Venice API tokens are displayed once upon minting and never stored in plaintext by the backend.
+* **E2EE & ZDR Visibility**: Visual badges and filtering for confidential hardware enclave models (AMD SEV-SNP) and Zero Data Retention models.
+* **Granular Spend Defense**: Automated hard-stop limits ensure no autonomous agent or external service can run over allocated daily or weekly USD ceilings.
 
 ---
 
-## 📜 License
-MIT License. See [LICENSE](LICENSE) for details.
+## 📄 License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.

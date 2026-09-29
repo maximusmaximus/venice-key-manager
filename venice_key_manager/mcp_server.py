@@ -10,6 +10,11 @@ from .models import (
     KeyUpdateRequest,
     KeyCycleRequest,
     InferenceTestRequest,
+    MODEL_TIER_MAPPING,
+    MODEL_TIER_ORDER,
+    is_tier_allowed,
+    resolve_model_tier,
+    get_model_for_tier,
 )
 from .state import state_store
 from .report import DailyKeyReport
@@ -242,6 +247,166 @@ class VeniceMCPServer:
                         }
                     }
                 }
+            },
+            {
+                "name": "venice_list_projects",
+                "description": "List all inference allocation projects with spending caps, live spend, connected external keys count, and max model tier.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "venice_create_project",
+                "description": "Create a new project allocation for external services or agents. Sets daily/weekly spend limits, maximum model tier (xs to xl), and default sub-key daily cap (default: $0.25).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Project or service group name"},
+                        "description": {"type": "string", "description": "Description of project purpose or agent fleet"},
+                        "daily_limit_usd": {"type": "number", "default": 1.00, "description": "Daily total spending ceiling for this project in USD"},
+                        "weekly_limit_usd": {"type": "number", "description": "Optional weekly spending ceiling in USD"},
+                        "default_sub_key_daily_usd": {"type": "number", "default": 0.25, "description": "Default daily spend cap for generated sub-keys (default: 0.25 USD)"},
+                        "max_model_tier": {
+                            "type": "string",
+                            "enum": ["xs", "s", "m", "l", "xl"],
+                            "default": "xl",
+                            "description": "Maximum model size tier permitted (xs: 3B/flash, s: 70B-lite, m: 70B, l: R1, xl: 405B/E2EE)"
+                        }
+                    },
+                    "required": ["name"]
+                }
+            },
+            {
+                "name": "venice_update_project",
+                "description": "Modify an existing project allocation: change spend ceilings, max tier, or status (active/paused).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "project_id": {"type": "string", "description": "ID of the project to update"},
+                        "name": {"type": "string", "description": "Updated project name"},
+                        "daily_limit_usd": {"type": "number", "description": "New daily spend limit in USD"},
+                        "weekly_limit_usd": {"type": "number", "description": "New weekly spend limit in USD"},
+                        "default_sub_key_daily_usd": {"type": "number", "description": "New default sub-key cap"},
+                        "max_model_tier": {"type": "string", "enum": ["xs", "s", "m", "l", "xl"], "description": "New max tier ceiling"},
+                        "status": {"type": "string", "enum": ["active", "paused"], "description": "Project status"}
+                    },
+                    "required": ["project_id"]
+                }
+            },
+            {
+                "name": "venice_list_external_keys",
+                "description": "List all external use keys and sub-keys with their spend limits, spent today, max tier, and parent project.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "project_id": {"type": "string", "description": "Optional project filter"}
+                    }
+                }
+            },
+            {
+                "name": "venice_create_external_key",
+                "description": "Generate an external use key from local dashboard for an agent or client service, tied to a project with model tier (xs to xl) and spending allocation.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "project_id": {"type": "string", "description": "Target project ID"},
+                        "name": {"type": "string", "description": "Key label or agent name"},
+                        "daily_limit_usd": {"type": "number", "description": "Daily spend limit in USD (defaults to project default_sub_key_daily_usd: 0.25)"},
+                        "weekly_limit_usd": {"type": "number", "description": "Optional weekly spend limit in USD"},
+                        "limit_period": {"type": "string", "enum": ["DAY", "WEEK"], "default": "DAY"},
+                        "max_model_tier": {
+                            "type": "string",
+                            "enum": ["xs", "s", "m", "l", "xl"],
+                            "default": "xl",
+                            "description": "Max model tier (xs: low cost/fast, xl: 405B/E2EE)"
+                        },
+                        "prefix": {"type": "string", "default": "vkm_ext_", "description": "Key token prefix"},
+                        "notes": {"type": "string", "description": "Optional notes or agent contact info"}
+                    },
+                    "required": ["project_id", "name"]
+                }
+            },
+            {
+                "name": "venice_create_sub_key",
+                "description": "Create a sub-key with an allocated amount per project per day or week. By default unless created by admin is: 25 cents per project per day ($0.25 USD).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "parent_key_or_token": {"type": "string", "description": "Parent external key token, key ID, or valid pairing code"},
+                        "name": {"type": "string", "description": "Name for the sub-key or agent"},
+                        "amount_usd": {"type": "number", "default": 0.25, "description": "Allocated amount in USD (default: 0.25)"},
+                        "period": {"type": "string", "enum": ["DAY", "WEEK"], "default": "DAY", "description": "Allocation period"},
+                        "max_model_tier": {"type": "string", "enum": ["xs", "s", "m", "l", "xl"], "description": "Optional tier restriction"},
+                        "notes": {"type": "string", "description": "Optional description"}
+                    },
+                    "required": ["parent_key_or_token", "name"]
+                }
+            },
+            {
+                "name": "venice_modify_external_key_allocation",
+                "description": "Modify the inference allocation, model tier, or active status for a connected agent or external key.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "key_id": {"type": "string", "description": "The external key ID to modify"},
+                        "name": {"type": "string", "description": "Updated name"},
+                        "daily_limit_usd": {"type": "number", "description": "New daily spend limit in USD"},
+                        "weekly_limit_usd": {"type": "number", "description": "New weekly spend limit in USD"},
+                        "max_model_tier": {"type": "string", "enum": ["xs", "s", "m", "l", "xl"], "description": "New max tier"},
+                        "status": {"type": "string", "enum": ["active", "paused", "revoked"], "description": "Status"}
+                    },
+                    "required": ["key_id"]
+                }
+            },
+            {
+                "name": "venice_revoke_external_key",
+                "description": "Revoke an external key or sub-key, immediately cutting off gateway inference access.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "key_id_or_token": {"type": "string", "description": "The key ID or token string to revoke"}
+                    },
+                    "required": ["key_id_or_token"]
+                }
+            },
+            {
+                "name": "venice_get_gateway_info",
+                "description": "Get Cloudflare DNS gateway endpoint URL, model tier details (xs to xl), and sample client integration code.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "venice_set_cloudflare_gateway_url",
+                "description": "Set or update the public Cloudflare DNS gateway URL for external clients.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "Public gateway URL (e.g. https://venice-gateway.yourdomain.com)"}
+                    },
+                    "required": ["url"]
+                }
+            },
+            {
+                "name": "venice_gateway_chat_completion",
+                "description": "Execute an inference request through the gateway using an external key or pairing code. Enforces tier limits (xs to xl) and meters budget.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "auth_token": {"type": "string", "description": "External key or pairing code token"},
+                        "model": {
+                            "type": "string",
+                            "default": "xs",
+                            "description": "Model tier (xs, s, m, l, xl) or concrete model name"
+                        },
+                        "prompt": {"type": "string", "description": "User prompt message"},
+                        "system_prompt": {"type": "string", "description": "Optional system prompt instruction"},
+                        "max_tokens": {"type": "integer", "default": 256, "description": "Max response tokens"}
+                    },
+                    "required": ["auth_token", "prompt"]
+                }
             }
         ]
 
@@ -398,6 +563,162 @@ class VeniceMCPServer:
                 for t in tokens:
                     t["magic_url"] = f"{base_url}/?token={t['token']}"
                 return json.dumps({"total": len(tokens), "tokens": tokens}, indent=2)
+
+            elif name == "venice_list_projects":
+                projects = state_store.list_projects()
+                return json.dumps({"total": len(projects), "projects": projects}, indent=2)
+
+            elif name == "venice_create_project":
+                name_val = args["name"]
+                desc = args.get("description", "")
+                daily = float(args.get("daily_limit_usd", 1.00))
+                weekly = float(args["weekly_limit_usd"]) if args.get("weekly_limit_usd") is not None else None
+                default_sub = float(args.get("default_sub_key_daily_usd", 0.25))
+                tier = args.get("max_model_tier", "xl")
+                proj = state_store.create_project(
+                    name=name_val,
+                    description=desc,
+                    daily_limit_usd=daily,
+                    weekly_limit_usd=weekly,
+                    default_sub_key_daily_usd=default_sub,
+                    max_model_tier=tier,
+                )
+                return json.dumps({"status": "success", "project": proj}, indent=2)
+
+            elif name == "venice_update_project":
+                pid = args["project_id"]
+                updates = {k: v for k, v in args.items() if k != "project_id" and v is not None}
+                res = state_store.update_project(pid, **updates)
+                if not res:
+                    return json.dumps({"error": f"Project '{pid}' not found."})
+                return json.dumps({"status": "success", "project": res}, indent=2)
+
+            elif name == "venice_list_external_keys":
+                pid = args.get("project_id")
+                ext_keys = state_store.list_external_keys(project_id=pid)
+                return json.dumps({"total": len(ext_keys), "keys": ext_keys}, indent=2)
+
+            elif name == "venice_create_external_key":
+                key_record = state_store.create_external_key(
+                    project_id=args["project_id"],
+                    name=args["name"],
+                    daily_limit_usd=args.get("daily_limit_usd"),
+                    weekly_limit_usd=args.get("weekly_limit_usd"),
+                    limit_period=args.get("limit_period", "DAY"),
+                    max_model_tier=args.get("max_model_tier", "xl"),
+                    prefix=args.get("prefix", "vkm_ext_"),
+                    notes=args.get("notes", ""),
+                    created_by="mcp_admin",
+                    key_type="ADMIN_EXTERNAL",
+                )
+                gw_url = state_store.get_cloudflare_gateway_url() or "http://localhost:8660"
+                key_record["curl_example"] = (
+                    f"curl -X POST {gw_url}/v1/chat/completions \\\n"
+                    f"  -H 'Authorization: Bearer {key_record['token']}' \\\n"
+                    f"  -H 'Content-Type: application/json' \\\n"
+                    f"  -d '{{\"model\": \"{key_record['max_model_tier']}\", \"messages\": [{{\"role\": \"user\", \"content\": \"Hello!\"}}]}}'"
+                )
+                return json.dumps({"status": "success", "key": key_record}, indent=2)
+
+            elif name == "venice_create_sub_key":
+                sub_key = state_store.create_sub_key(
+                    parent_key_or_token=args["parent_key_or_token"],
+                    name=args["name"],
+                    amount_usd=args.get("amount_usd", 0.25),
+                    period=args.get("period", "DAY"),
+                    max_model_tier=args.get("max_model_tier"),
+                    notes=args.get("notes"),
+                )
+                return json.dumps({"status": "success", "sub_key": sub_key}, indent=2)
+
+            elif name == "venice_modify_external_key_allocation":
+                kid = args["key_id"]
+                updates = {k: v for k, v in args.items() if k != "key_id" and v is not None}
+                res = state_store.update_external_key(kid, **updates)
+                if not res:
+                    return json.dumps({"error": f"External key '{kid}' not found."})
+                return json.dumps({"status": "success", "key": res}, indent=2)
+
+            elif name == "venice_revoke_external_key":
+                target = args["key_id_or_token"]
+                ok = state_store.revoke_external_key(target)
+                if not ok:
+                    return json.dumps({"error": f"Key '{target}' not found or could not be revoked."})
+                return json.dumps({"status": "success", "message": f"External key '{target}' revoked."}, indent=2)
+
+            elif name == "venice_get_gateway_info":
+                gw_url = state_store.get_cloudflare_gateway_url() or "http://localhost:8660"
+                return json.dumps({
+                    "cloudflare_gateway_url": state_store.get_cloudflare_gateway_url(),
+                    "effective_gateway_url": gw_url,
+                    "tiers": MODEL_TIER_MAPPING,
+                    "tier_order": MODEL_TIER_ORDER,
+                    "total_projects": len(state_store.list_projects()),
+                    "total_external_keys": len(state_store.list_external_keys()),
+                }, indent=2)
+
+            elif name == "venice_set_cloudflare_gateway_url":
+                url_val = args["url"]
+                state_store.set_cloudflare_gateway_url(url_val)
+                return json.dumps({
+                    "status": "success",
+                    "cloudflare_gateway_url": state_store.get_cloudflare_gateway_url(),
+                }, indent=2)
+
+            elif name == "venice_gateway_chat_completion":
+                token = args["auth_token"]
+                model_arg = args.get("model", "xs")
+                prompt_arg = args["prompt"]
+                sys_prompt = args.get("system_prompt")
+                max_tokens = int(args.get("max_tokens", 256))
+
+                # Validate token & spending
+                is_valid, key_meta, project, err = state_store.validate_external_key(token)
+                if not is_valid:
+                    return json.dumps({"error": f"Gateway access denied: {err}"})
+
+                req_tier = resolve_model_tier(model_arg)
+                max_tier = key_meta.get("max_model_tier", "xl")
+                if not is_tier_allowed(req_tier, max_tier):
+                    return json.dumps({
+                        "error": f"Requested tier '{req_tier.upper()}' exceeds key maximum permitted tier '{max_tier.upper()}'."
+                    })
+
+                venice_model = get_model_for_tier(req_tier) if model_arg in MODEL_TIER_ORDER else model_arg
+                messages = []
+                if sys_prompt:
+                    messages.append({"role": "system", "content": sys_prompt})
+                messages.append({"role": "user", "content": prompt_arg})
+
+                payload = {
+                    "model": venice_model,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                }
+                resp = await self.client.chat_completion(payload)
+                if "error" in resp:
+                    return json.dumps(resp, indent=2)
+
+                usage = resp.get("usage", {})
+                p_tok = int(usage.get("prompt_tokens", 0))
+                c_tok = int(usage.get("completion_tokens", 0))
+                tot_tok = int(usage.get("total_tokens", p_tok + c_tok))
+
+                tier_info = MODEL_TIER_MAPPING.get(req_tier, MODEL_TIER_MAPPING["m"])
+                cost = max(0.0001, round(
+                    ((p_tok * tier_info["cost_per_m_in"]) + (c_tok * tier_info["cost_per_m_out"])) / 1_000_000.0,
+                    6
+                ))
+                state_store.record_external_usage(key_meta["id"], project["id"], cost, tot_tok)
+
+                return json.dumps({
+                    "status": "success",
+                    "tier_used": req_tier,
+                    "model": venice_model,
+                    "cost_usd": cost,
+                    "usage": usage,
+                    "choices": resp.get("choices", []),
+                }, indent=2)
 
             else:
                 return json.dumps({"error": f"Unknown tool: {name}"})

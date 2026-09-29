@@ -368,3 +368,17 @@ class VeniceClient:
                 model=model,
                 error=str(e),
             )
+
+    async def chat_completion(self, payload: Dict[str, Any], api_key: Optional[str] = None) -> Dict[str, Any]:
+        """Proxy a chat completion request directly to Venice.ai."""
+        url = f"{self.base_url}/chat/completions"
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(url, json=payload, headers=self._headers(custom_key=api_key))
+            if resp.status_code != 200:
+                try:
+                    err_json = resp.json()
+                except Exception:
+                    err_json = {"error": {"message": f"Venice API HTTP {resp.status_code}: {resp.text}"}}
+                return err_json
+            return resp.json()
+
