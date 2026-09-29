@@ -1,0 +1,43 @@
+import os
+from pathlib import Path
+from typing import List, Optional
+from pydantic import BaseModel, Field
+from dotenv import load_dotenv
+
+# Search for .env in explicit env var, current working dir, package dir, or /opt/venice-key-manager
+env_candidates = [
+    os.getenv("VENICE_KEY_MANAGER_ENV"),
+    Path.cwd() / ".env",
+    Path(__file__).resolve().parent.parent / ".env",
+    Path("/opt/venice-key-manager/.env"),
+]
+for p in env_candidates:
+    if p and Path(p).exists():
+        load_dotenv(dotenv_path=Path(p), override=False)
+        break
+
+
+class AppConfig(BaseModel):
+    venice_api_key: str = Field(default_factory=lambda: os.getenv("VENICE_ADMIN_KEY") or os.getenv("VENICE_API_KEY", ""))
+    venice_base_url: str = Field(default_factory=lambda: os.getenv("VENICE_BASE_URL", "https://api.venice.ai/api/v1").rstrip("/"))
+    web_host: str = Field(default_factory=lambda: os.getenv("WEB_HOST", "0.0.0.0"))
+    web_port: int = Field(default_factory=lambda: int(os.getenv("WEB_PORT", "8660")))
+    web_secret_key: str = Field(default_factory=lambda: os.getenv("WEB_SECRET_KEY", "venice-km-insecure-secret-key-change-me"))
+    low_usd_warning_threshold: float = Field(default_factory=lambda: float(os.getenv("LOW_USD_WARNING_THRESHOLD", "0.20")))
+    telegram_bot_token: Optional[str] = Field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN") or None)
+    telegram_allowed_users: List[int] = Field(default_factory=lambda: [
+        int(uid.strip())
+        for uid in os.getenv("TELEGRAM_ALLOWED_USERS", "").split(",")
+        if uid.strip().isdigit()
+    ])
+    mcp_port: int = Field(default_factory=lambda: int(os.getenv("MCP_PORT", "8661")))
+    data_dir: Path = Field(default_factory=lambda: Path(os.getenv("DATA_DIR", "./data")))
+    dashboard_base_url: str = Field(default_factory=lambda: os.getenv("DASHBOARD_BASE_URL", "http://localhost:8660"))
+    web_auth_token: Optional[str] = Field(default_factory=lambda: os.getenv("WEB_AUTH_TOKEN") or None)
+
+    def ensure_data_dir(self) -> Path:
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        return self.data_dir
+
+
+config = AppConfig()
