@@ -20,6 +20,13 @@ from core.vault import KeyVault
 from core.venice_client import VeniceClient
 from core.tg_manager import TelegramAgentManager
 from core.deployer import ConfigDeployer
+from core.tiers import (
+    MODEL_TIER_ORDER,
+    MODEL_TIER_MAPPING,
+    get_model_for_tier,
+    resolve_model_tier,
+    is_tier_allowed
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("venice_tg_bot")
@@ -103,10 +110,10 @@ class VeniceTelegramBot:
                 ],
                 [
                     {"text": "🤖 Agent TG Bots", "callback_data": "menu_tg_bots"},
-                    {"text": "➕ Issue Key ($5)", "callback_data": "act_create_key_5"}
+                    {"text": "➕ Provision Key (XS-XL)", "callback_data": "wiz_key_agent"}
                 ],
                 [
-                    {"text": "⚡ Light Inference", "callback_data": "act_quick_infer"},
+                    {"text": "⚡ Tier Inference", "callback_data": "menu_infer_tiers"},
                     {"text": "🚀 Deploy to Config", "callback_data": "act_deploy_config"}
                 ],
                 [
@@ -202,25 +209,43 @@ class VeniceTelegramBot:
         elif data == "menu_keys":
             self.answer_callback(cb_id)
             admin_key = self.vault.get_venice_admin_key()
-            if not admin_key:
-                txt = (
-                    f"🔑 *Venice.ai Keys*\n\n"
-                    f"⚠️ *Admin Key Not Configured*\n"
-                    f"Listing remote keys requires an ADMIN key. You can configure your Admin Key in the Web Dashboard (`http://localhost:8844`) or set it via command:\n"
-                    f"`/set_admin_key <your_key>`\n\n"
-                    f"Currently active inference key is operational for chat completions."
-                )
-            else:
+            vault_keys = self.vault.get_venice_keys()
+            remote_keys = []
+            if admin_key:
                 res = client.list_keys(admin_key=admin_key)
                 if res.get("success"):
-                    keys = res.get("keys", [])
-                    txt = f"🔑 *Active Venice Keys ({len(keys)})*:\n\n"
-                    for k in keys[:8]:
-                        txt += f"• *{k.get('description', 'Key')}* (`{k.get('apiKeyType')}`)\n  ID: `{k.get('id')}`\n"
-                else:
-                    txt = f"❌ *Error listing keys*: `{res.get('error')}`"
+                    remote_keys = res.get("keys", [])
 
-            self.edit_message(chat_id, msg_id, txt, reply_markup=self.back_to_main_keyboard())
+            # Merge remote and vault keys
+            merged = {}
+            for k in vault_keys:
+                merged[k.get("id")] = k
+            for k in remote_keys:
+                merged[k.get("id")] = {**merged.get(k.get("id"), {}), **k}
+
+            all_keys = list(merged.values())
+            if all_keys:
+                txt = f"🔑 *Managed Venice Keys ({len(all_keys)})*:\n\n"
+                for k in all_keys[:8]:
+                    desc = k.get("description", "Venice Key")
+                    k_type = k.get("apiKeyType", "INFERENCE")
+                    k_tier = (k.get("maxModelTier") or "xl").upper()
+                    limit = k.get("consumptionLimits", {}).get("usd")
+                    lim_str = f"${limit}" if limit else "Uncapped"
+                    txt += f"• *{desc}* `[{k_type}]` `[TIER: {k_tier}]`\n  ID: `{k.get('id')}` | Cap: `{lim_str}`\n"
+            else:
+                txt = (
+                    "🔑 *Venice.ai Keys*\n\n"
+                    "No keys currently stored in vault. Tap *Provision Key* to allocate a key with XS-XL quality limits."
+                )
+
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "➕ Provision Key (XS-XL)", "callback_data": "wiz_key_agent"}],
+                    [{"text": "« Back to Main Dashboard", "callback_data": "menu_main"}]
+                ]
+            }
+            self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
 
         elif data == "menu_tg_bots":
             self.answer_callback(cb_id)
@@ -240,68 +265,280 @@ class VeniceTelegramBot:
             }
             self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
 
-        elif data == "act_create_key_5":
-            self.answer_callback(cb_id, "Issuing key...")
-            admin_key = self.vault.get_venice_admin_key()
-            if not admin_key:
-                self.edit_message(
-                    chat_id,
-                    msg_id,
-                    "⚠️ *Admin Key Required*\nTo issue new Venice keys via API, an Admin key is required. Please set it via `/set_admin_key <key>` or in the Web Dashboard.",
-                    reply_markup=self.back_to_main_keyboard()
-                )
-                return
-
-            res = client.create_key(
-                description="Telegram Issued Key",
-                key_type="INFERENCE",
-                limit_usd=5.0
+        # Wizard Step 1: Agent Selection
+        elif data in ("wiz_key_agent", "wiz_key_start", "act_create_key_5"):
+            self.answer_callback(cb_id)
+            txt = (
+                "🧙 *Agent Key Provisioning Wizard* (Step 1/3)\n\n"
+                "Select which agent or service this key will be allocated for:"
             )
-            if res.get("success"):
-                k = res.get("key", {})
-                self.vault.store_venice_key(k)
-                raw_k = k.get("apiKey") or k.get("key") or k.get("id")
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🎵 hermes-music", "callback_data": "wiz_agent_hermes-music"},
+                        {"text": "🌐 a2a-node", "callback_data": "wiz_agent_a2a-node"}
+                    ],
+                    [
+                        {"text": "🎧 dawagent", "callback_data": "wiz_agent_dawagent"},
+                        {"text": "⚙️ worker-audio", "callback_data": "wiz_agent_worker-audio"}
+                    ],
+                    [
+                        {"text": "🤖 custom-agent", "callback_data": "wiz_agent_custom-agent"}
+                    ],
+                    [
+                        {"text": "« Back to Main Dashboard", "callback_data": "menu_main"}
+                    ]
+                ]
+            }
+            self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
+
+        # Wizard Step 2: Quality Tier Selection (XS to XL)
+        elif data.startswith("wiz_agent_"):
+            self.answer_callback(cb_id)
+            agent = data[len("wiz_agent_"):]
+            txt = (
+                f"🧙 *Agent Key Provisioning Wizard* (Step 2/3)\n\n"
+                f"• *Target Agent*: `{agent}`\n\n"
+                f"Select the maximum *Inference Model Quality Tier* for this agent:\n"
+                f"_(Keys are strictly gated: lower tiers cannot access higher model classes)_"
+            )
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "🟣 XS: Ultra-Fast (1B-3B, Routing)", "callback_data": f"wiz_tier_{agent}_xs"}],
+                    [{"text": "🟢 S: Efficient (Flash, 8B-14B)", "callback_data": f"wiz_tier_{agent}_s"}],
+                    [{"text": "🟡 M: Balanced Quality (70B, Coding)", "callback_data": f"wiz_tier_{agent}_m"}],
+                    [{"text": "🔵 L: Reasoning (R1, 72B)", "callback_data": f"wiz_tier_{agent}_l"}],
+                    [{"text": "🔴 XL: Flagship 405B+ & Enclave", "callback_data": f"wiz_tier_{agent}_xl"}],
+                    [{"text": "« Back to Agents", "callback_data": "wiz_key_agent"}],
+                    [{"text": "« Main Dashboard", "callback_data": "menu_main"}]
+                ]
+            }
+            self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
+
+        # Wizard Step 3: Tier Specs & Budget Cap Selection
+        elif data.startswith("wiz_tier_"):
+            self.answer_callback(cb_id)
+            parts = data.split("_")
+            agent = parts[2]
+            tier = parts[3]
+            t_info = MODEL_TIER_MAPPING.get(tier, {})
+
+            txt = (
+                f"🧙 *Agent Key Provisioning Wizard* (Step 3/3)\n\n"
+                f"• *Target Agent*: `{agent}`\n"
+                f"• *Allocated Tier*: `{tier.upper()}` — {t_info.get('label', '')}\n"
+                f"• *Workload Focus*: {t_info.get('description', '')}\n"
+                f"• *Default Model*: `{t_info.get('default_model', '')}`\n"
+                f"• *Allowed Models*: `{', '.join(t_info.get('models', []))}`\n"
+                f"• *Est. Rate*: `${t_info.get('cost_per_m_in', 0):.2f}` / `${t_info.get('cost_per_m_out', 0):.2f}` per 1M tok\n\n"
+                f"Select monthly budget cap to provision:"
+            )
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {"text": "⚡ $5.00 / mo", "callback_data": f"wiz_do_{agent}_{tier}_5"},
+                        {"text": "⚡ $10.00 / mo", "callback_data": f"wiz_do_{agent}_{tier}_10"}
+                    ],
+                    [
+                        {"text": "⚡ $25.00 / mo", "callback_data": f"wiz_do_{agent}_{tier}_25"},
+                        {"text": "⚡ Unlimited", "callback_data": f"wiz_do_{agent}_{tier}_0"}
+                    ],
+                    [
+                        {"text": "« Change Quality Tier", "callback_data": f"wiz_agent_{agent}"}
+                    ],
+                    [
+                        {"text": "« Main Dashboard", "callback_data": "menu_main"}
+                    ]
+                ]
+            }
+            self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
+
+        # Wizard Step 4: Issue / Generate Key
+        elif data.startswith("wiz_do_"):
+            self.answer_callback(cb_id, "Provisioning key...")
+            parts = data.split("_")
+            agent = parts[2]
+            tier = parts[3]
+            limit_val = float(parts[4]) if len(parts) > 4 and parts[4] != "0" else None
+            t_info = MODEL_TIER_MAPPING.get(tier, {})
+            admin_key = self.vault.get_venice_admin_key()
+
+            if admin_key:
+                res = client.create_key(
+                    description=f"{agent} ({tier.upper()} Tier)",
+                    key_type="INFERENCE",
+                    limit_usd=limit_val,
+                    admin_key=admin_key
+                )
+                if res.get("success"):
+                    key_obj = res.get("key", {})
+                    key_obj["maxModelTier"] = tier
+                    key_obj["agent"] = agent
+                    self.vault.store_venice_key(key_obj)
+                    raw_k = key_obj.get("apiKey") or key_obj.get("key") or key_obj.get("id")
+                    lim_str = f"${limit_val:.2f} USD" if limit_val else "Unlimited"
+
+                    txt = (
+                        f"✅ *Agent Key Successfully Provisioned!*\n\n"
+                        f"• *Agent*: `{agent}`\n"
+                        f"• *Model Quality Tier*: `{tier.upper()}` ({t_info.get('label')})\n"
+                        f"• *Monthly Budget*: `{lim_str}`\n"
+                        f"• *Key ID*: `{key_obj.get('id')}`\n"
+                        f"• *API Key*: `{raw_k}`\n\n"
+                        f"Stored in vault with model quality gating enforced."
+                    )
+                    kb = {
+                        "inline_keyboard": [
+                            [{"text": "🚀 Deploy to Agent Config", "callback_data": f"deploy_key_{key_obj.get('id')}"}],
+                            [{"text": f"⚡ Test Tier {tier.upper()} ({t_info.get('default_model')})", "callback_data": f"infer_run_{tier}"}],
+                            [{"text": "🔑 View All Keys", "callback_data": "menu_keys"}],
+                            [{"text": "« Back to Main Dashboard", "callback_data": "menu_main"}]
+                        ]
+                    }
+                    self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
+                else:
+                    self.edit_message(
+                        chat_id,
+                        msg_id,
+                        f"❌ *Failed to create key*: `{res.get('error')}`",
+                        reply_markup=self.back_to_main_keyboard()
+                    )
+            else:
+                lim_str = f"${limit_val:.2f} USD" if limit_val else "Unlimited"
                 txt = (
-                    f"✅ *New Venice Key Generated!*\n\n"
-                    f"• *Description*: `Telegram Issued Key`\n"
-                    f"• *Type*: `INFERENCE`\n"
-                    f"• *Monthly Limit*: `$5.00 USD`\n"
-                    f"• *Key*: `{raw_k}`\n\n"
-                    f"Stored in local vault. Tap Deploy to push it to `hermes config.yaml`."
+                    f"⚠️ *Venice Admin API Key Required for Remote Issuance*\n\n"
+                    f"Currently operating in *Inference Mode*. To create new keys via Venice API, an Admin key is required.\n\n"
+                    f"You can either:\n"
+                    f"1. *Bind Active Inference Key*: Allocate existing credentials to `{agent}` under *Tier {tier.upper()}* with local policy gating.\n"
+                    f"2. Configure Venice Admin Key via `/set_admin_key <key>`."
                 )
                 kb = {
                     "inline_keyboard": [
-                        [{"text": "🚀 Deploy to Hermes config.yaml", "callback_data": f"deploy_key_{k.get('id')}"}],
-                        [{"text": "« Back to Main Dashboard", "callback_data": "menu_main"}]
+                        [{"text": f"📥 Bind Active Key as Tier {tier.upper()}", "callback_data": f"wiz_bind_{agent}_{tier}_{int(limit_val or 0)}"}],
+                        [{"text": "« Back to Tier Selection", "callback_data": f"wiz_agent_{agent}"}],
+                        [{"text": "« Main Dashboard", "callback_data": "menu_main"}]
                     ]
                 }
                 self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
-            else:
-                self.edit_message(
-                    chat_id,
-                    msg_id,
-                    f"❌ *Failed to create key*: `{res.get('error')}`",
-                    reply_markup=self.back_to_main_keyboard()
-                )
 
-        elif data == "act_quick_infer":
-            self.answer_callback(cb_id, "Running light inference...")
-            prompt = "Say hello from Venice AI in 1 short sentence."
-            res = client.test_inference(prompt=prompt, model="deepseek-v4-flash", max_tokens=60)
+        # Bind active key to agent with tier limit
+        elif data.startswith("wiz_bind_"):
+            self.answer_callback(cb_id, "Binding active key...")
+            parts = data.split("_")
+            agent = parts[2]
+            tier = parts[3]
+            limit_val = float(parts[4]) if len(parts) > 4 and parts[4] != "0" else None
+            t_info = MODEL_TIER_MAPPING.get(tier, {})
+
+            active_key = self.vault.get_active_venice_key()
+            if not active_key:
+                self.edit_message(chat_id, msg_id, "❌ No active Venice key found in vault.", reply_markup=self.back_to_main_keyboard())
+                return
+
+            import hashlib
+            h = hashlib.sha256(active_key.encode()).hexdigest()[:10]
+            key_id = f"vk_{h}"
+
+            key_obj = {
+                "id": key_id,
+                "apiKey": active_key,
+                "description": f"{agent} ({tier.upper()} Tier)",
+                "apiKeyType": "INFERENCE",
+                "maxModelTier": tier,
+                "agent": agent,
+                "consumptionLimits": {"usd": limit_val} if limit_val else {},
+                "status": "ACTIVE"
+            }
+            self.vault.store_venice_key(key_obj)
+
+            txt = (
+                f"✅ *Active Key Allocated to Agent!*\n\n"
+                f"• *Agent*: `{agent}`\n"
+                f"• *Quality Tier*: `{tier.upper()}` ({t_info.get('label')})\n"
+                f"• *Key ID*: `{key_id}`\n\n"
+                f"Key successfully registered with Tier `{tier.upper()}` model gating policy."
+            )
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "🚀 Deploy to Agent Config", "callback_data": f"deploy_key_{key_id}"}],
+                    [{"text": f"⚡ Test Tier {tier.upper()} Inference", "callback_data": f"infer_run_{tier}"}],
+                    [{"text": "🔑 View All Keys", "callback_data": "menu_keys"}],
+                    [{"text": "« Main Dashboard", "callback_data": "menu_main"}]
+                ]
+            }
+            self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
+
+        # Deploy specific key by key_id
+        elif data.startswith("deploy_key_"):
+            self.answer_callback(cb_id, "Deploying key...")
+            key_id = data[len("deploy_key_"):]
+            actual_key = key_id
+            for k in self.vault.get_venice_keys():
+                if k.get("id") == key_id and k.get("apiKey"):
+                    actual_key = k.get("apiKey")
+                    break
+            res = ConfigDeployer.deploy_venice_key(actual_key)
+            if res.get("success"):
+                txt = (
+                    f"🚀 *Configuration Deployed!*\n\n"
+                    f"• *Target*: `{res.get('target')}`\n"
+                    f"• *Backup Created*: `{res.get('backup')}`\n"
+                    f"• *Key Preview*: `{res.get('key_preview')}`\n\n"
+                    f"Configuration file updated with key `{key_id}`."
+                )
+            else:
+                txt = f"❌ *Deployment Failed*: `{res.get('error')}`"
+            self.edit_message(chat_id, msg_id, txt, reply_markup=self.back_to_main_keyboard())
+
+        # Model Quality Tier Inference Sandbox Menu
+        elif data in ("menu_infer_tiers", "act_quick_infer"):
+            self.answer_callback(cb_id)
+            txt = (
+                "⚡ *Venice Model Quality Tier Sandbox*\n\n"
+                "Select a Model Quality Tier to test live latency, tokens, and response:"
+            )
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "🟣 XS: llama-3.2-3b (Ultra-Fast)", "callback_data": "infer_run_xs"}],
+                    [{"text": "🟢 S: deepseek-v4-flash (Efficient)", "callback_data": "infer_run_s"}],
+                    [{"text": "🟡 M: llama-3.3-70b (Balanced)", "callback_data": "infer_run_m"}],
+                    [{"text": "🔵 L: deepseek-r1 (Reasoning)", "callback_data": "infer_run_l"}],
+                    [{"text": "🔴 XL: llama-3.1-405b (Flagship)", "callback_data": "infer_run_xl"}],
+                    [{"text": "« Back to Main Dashboard", "callback_data": "menu_main"}]
+                ]
+            }
+            self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
+
+        # Run inference for a specific tier
+        elif data.startswith("infer_run_"):
+            tier = data[len("infer_run_"):]
+            self.answer_callback(cb_id, f"Running Tier {tier.upper()} inference...")
+            model = get_model_for_tier(tier)
+            t_info = MODEL_TIER_MAPPING.get(tier, {})
+            prompt = "Say hello from Venice and state your model tier in one sentence."
+
+            res = client.test_inference(prompt=prompt, model=model, max_tokens=70)
             if res.get("success"):
                 cost = res.get("cost", {}).get("usd", 0)
                 txt = (
-                    f"⚡ *Venice Light Inference Result*\n\n"
-                    f"• *Model*: `{res.get('model')}`\n"
+                    f"⚡ *Tier {tier.upper()} Inference Result*\n\n"
+                    f"• *Tier*: `{tier.upper()}` — {t_info.get('label', '')}\n"
+                    f"• *Model*: `{model}`\n"
                     f"• *Latency*: `{res.get('latency_ms')} ms`\n"
                     f"• *Tokens*: `{res.get('usage', {}).get('total_tokens', 0)}`\n"
-                    f"• *Cost*: `${cost:.6f} USD`\n\n"
-                    f"*Output*:\n> {res.get('content')}\n\n"
-                    f"_Send /ask <prompt> to test any custom prompt!_"
+                    f"• *Estimated Cost*: `${cost:.6f} USD`\n\n"
+                    f"*Output*:\n> {res.get('content')}"
                 )
             else:
-                txt = f"❌ *Inference Error*: `{res.get('error')}`"
-            self.edit_message(chat_id, msg_id, txt, reply_markup=self.back_to_main_keyboard())
+                txt = f"❌ *Tier {tier.upper()} Inference Error*: `{res.get('error')}`"
+
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "🔄 Test Another Tier", "callback_data": "menu_infer_tiers"}],
+                    [{"text": "« Back to Main Dashboard", "callback_data": "menu_main"}]
+                ]
+            }
+            self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
 
         elif data in ("act_deploy_config", "act_deploy_hermes"):
             self.answer_callback(cb_id, "Deploying configuration...")
@@ -423,12 +660,64 @@ class VeniceTelegramBot:
                 txt = f"❌ *Inference Error*: `{res.get('error')}`"
             self.send_message(chat_id, txt)
 
+        elif text.startswith("/ask_tier"):
+            parts = text.split(maxsplit=2)
+            if len(parts) >= 3:
+                tier = parts[1].lower().strip()
+                prompt = parts[2].strip()
+                if tier not in MODEL_TIER_ORDER:
+                    self.send_message(chat_id, f"Invalid tier `{tier}`. Choose from: `{', '.join(MODEL_TIER_ORDER)}`")
+                    return
+                model = get_model_for_tier(tier)
+                client = self._get_venice_client()
+                res = client.test_inference(prompt=prompt, model=model, max_tokens=150)
+                if res.get("success"):
+                    cost = res.get("cost", {}).get("usd", 0)
+                    txt = (
+                        f"⚡ *Response* [Tier: `{tier.upper()}` | Model: `{model}`] "
+                        f"({res.get('latency_ms')} ms | {res.get('usage', {}).get('total_tokens', 0)} tok | ${cost:.5f}):\n\n"
+                        f"{res.get('content')}"
+                    )
+                else:
+                    txt = f"❌ *Inference Error*: `{res.get('error')}`"
+                self.send_message(chat_id, txt)
+            else:
+                self.send_message(chat_id, "Usage: `/ask_tier <xs|s|m|l|xl> <prompt>`")
+
+        elif text.startswith("/provision"):
+            # Launch provisioning wizard
+            txt = (
+                "🧙 *Agent Key Provisioning Wizard* (Step 1/3)\n\n"
+                "Select which agent or service this key will be allocated for:"
+            )
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🎵 hermes-music", "callback_data": "wiz_agent_hermes-music"},
+                        {"text": "🌐 a2a-node", "callback_data": "wiz_agent_a2a-node"}
+                    ],
+                    [
+                        {"text": "🎧 dawagent", "callback_data": "wiz_agent_dawagent"},
+                        {"text": "⚙️ worker-audio", "callback_data": "wiz_agent_worker-audio"}
+                    ],
+                    [
+                        {"text": "🤖 custom-agent", "callback_data": "wiz_agent_custom-agent"}
+                    ],
+                    [
+                        {"text": "« Back to Main Dashboard", "callback_data": "menu_main"}
+                    ]
+                ]
+            }
+            self.send_message(chat_id, txt, reply_markup=kb)
+
         elif text.startswith("/help"):
             txt = (
                 "⚡ *Venice & TG Engine Commands*:\n\n"
                 "• `/menu` or `/start` - Open interactive control dashboard\n"
+                "• `/provision` - Open Agent Key (XS-XL) Provisioning Wizard\n"
                 "• `/balance` - Check live USD and DIEM balance\n"
                 "• `/ask <prompt>` - Run light inference on Venice\n"
+                "• `/ask_tier <xs|s|m|l|xl> <prompt>` - Inference on specific model tier\n"
                 "• `/set_admin_key <key>` - Configure Venice Admin Key\n"
                 "• `/register_bot <agent> <token>` - Link bot token to agent\n"
                 "• `/help` - Show this guide"
