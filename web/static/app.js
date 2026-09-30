@@ -234,6 +234,7 @@ async function refreshAll() {
       loadAgentBots(),
       loadConfig(),
       loadVaultStatus(),
+      loadServiceStatus(),
       loadFleetNodes()
     ]);
   } else {
@@ -529,6 +530,45 @@ async function loadVaultStatus() {
     }
   } catch (err) {
     console.warn("Failed to load vault backup status:", err);
+  }
+}
+
+async function loadServiceStatus() {
+  const elWatchdog = document.getElementById("stat-service-watchdog");
+  const elAutostart = document.getElementById("stat-service-autostart");
+  const elUptime = document.getElementById("stat-service-uptime");
+  const elRestarts = document.getElementById("stat-service-restarts");
+
+  try {
+    const res = await apiFetch("/api/service/status");
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.success) {
+      if (elWatchdog) {
+        if (data.supervisor_running) {
+          elWatchdog.innerHTML = `<span class="badge badge-green">WATCHDOG ACTIVE ✅</span> <span class="text-mono" style="font-size: 11px;">(PID: ${data.supervisor_pid})</span>`;
+        } else {
+          elWatchdog.innerHTML = `<span class="badge badge-cyan">DIRECT PROCESS ⚡</span>`;
+        }
+      }
+      if (elAutostart) {
+        if (data.autostart_installed) {
+          const methods = (data.autostart_methods || []).join(", ");
+          elAutostart.innerHTML = `<span class="badge badge-green">BOOT ENABLED ✅</span> <span class="text-mono" style="font-size: 10px;">(${methods})</span>`;
+        } else {
+          elAutostart.innerHTML = `<span class="badge badge-yellow">NOT CONFIGURED ⚠️</span>`;
+        }
+      }
+      if (elUptime) {
+        const uptimeMin = (data.uptime_seconds / 60).toFixed(1);
+        elUptime.innerText = `Port ${data.port} | Uptime: ${uptimeMin}m`;
+      }
+      if (elRestarts) {
+        elRestarts.innerText = data.restarts_count || 0;
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to load service status:", err);
   }
 }
 
@@ -1025,6 +1065,54 @@ function initForms() {
     btnViewBackups.addEventListener("click", () => {
       openModal("modal-vault-backups");
       loadVaultBackups();
+    });
+  }
+
+  // Service Install & Restart
+  const btnSvcInstall = document.getElementById("btn-service-install");
+  if (btnSvcInstall) {
+    btnSvcInstall.addEventListener("click", async () => {
+      btnSvcInstall.disabled = true;
+      btnSvcInstall.innerHTML = `<span>⏳</span> Installing...`;
+      try {
+        const res = await apiFetch("/api/service/install", { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+          showToast("Auto-restart service installed for boot!");
+          loadServiceStatus();
+        } else {
+          showToast(`Install notice: ${JSON.stringify(data.messages || data.error)}`, "warning");
+        }
+      } catch (err) {
+        showToast(`Error: ${err.message}`, "error");
+      } finally {
+        btnSvcInstall.disabled = false;
+        btnSvcInstall.innerHTML = `<span>🔧</span> Re-install Boot Service`;
+      }
+    });
+  }
+
+  const btnSvcRestart = document.getElementById("btn-service-restart");
+  if (btnSvcRestart) {
+    btnSvcRestart.addEventListener("click", async () => {
+      if (!confirm("Recycle and restart the Venice Key Manager service now?")) return;
+      btnSvcRestart.disabled = true;
+      btnSvcRestart.innerHTML = `<span>⏳</span> Restarting...`;
+      try {
+        const res = await apiFetch("/api/service/restart", { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+          showToast("Restart signal dispatched! Service is recycling...");
+          setTimeout(refreshAll, 2500);
+        } else {
+          showToast(`Restart failed: ${data.error}`, "error");
+        }
+      } catch (err) {
+        showToast(`Error: ${err.message}`, "error");
+      } finally {
+        btnSvcRestart.disabled = false;
+        btnSvcRestart.innerHTML = `<span>🔄</span> Recycle / Restart Service`;
+      }
     });
   }
 }

@@ -427,6 +427,43 @@
             </div>
           </div>
         </div>
+
+        <!-- Card 4: Service Supervisor & Auto-Restart Watchdog -->
+        <div class="card" style="grid-column: 1 / -1; margin-top: 10px; border: 1px solid var(--accent-cyan);">
+          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 14px;">
+            <div>
+              <h3 class="card-title" style="margin-bottom: 4px;">🚀 Process Supervisor & 24/7 Auto-Restart Watchdog</h3>
+              <p class="text-muted" style="font-size: 13px; margin: 0;">Monitors Venice Key Manager continuously and auto-relaunches on reboot, crash, or exception across Windows, macOS, and Linux.</p>
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <button class="btn btn-secondary btn-sm" id="btn-service-install">
+                <span>🔧</span> Re-install Boot Service
+              </button>
+              <button class="btn btn-primary btn-sm" id="btn-service-restart">
+                <span>🔄</span> Recycle / Restart Service
+              </button>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; background: var(--bg-input); padding: 14px; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+            <div>
+              <div class="text-dim" style="font-size: 11px; font-weight: 700; text-transform: uppercase;">Watchdog Status</div>
+              <div id="stat-service-watchdog" style="font-weight: 600; margin-top: 4px; font-size: 13px;">Checking...</div>
+            </div>
+            <div>
+              <div class="text-dim" style="font-size: 11px; font-weight: 700; text-transform: uppercase;">Boot Auto-Start</div>
+              <div id="stat-service-autostart" style="font-weight: 600; margin-top: 4px; font-size: 13px;">Checking...</div>
+            </div>
+            <div>
+              <div class="text-dim" style="font-size: 11px; font-weight: 700; text-transform: uppercase;">Service Port / Uptime</div>
+              <div id="stat-service-uptime" style="font-weight: 600; margin-top: 4px; font-size: 13px;">--</div>
+            </div>
+            <div>
+              <div class="text-dim" style="font-size: 11px; font-weight: 700; text-transform: uppercase;">Total Auto-Restarts</div>
+              <div id="stat-service-restarts" style="font-weight: 600; margin-top: 4px; font-size: 13px;">0</div>
+            </div>
+          </div>
+        </div>
       </div>
     </main>
 

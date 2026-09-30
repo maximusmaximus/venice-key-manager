@@ -40,6 +40,7 @@ from web.server import start_web_server
 from telegram.bot import VeniceTelegramBot
 from mcp.server import VeniceMCPServer
 from core.tunnel import CloudflareTunnelManager
+from core.supervisor import ServiceSupervisor
 
 
 def run_all(port: int = 8844):
@@ -228,6 +229,58 @@ def handle_cli_commands(args):
             else:
                 print(f"\n❌ Restore failed: {res.get('error')}\n")
 
+    elif args.command == "service":
+        supervisor = ServiceSupervisor(root_dir=PROJECT_ROOT)
+        if args.subcommand == "status":
+            st = supervisor.get_status()
+            print("\n🛡️ Venice Key Manager Supervisor & Resilience Status:")
+            print(f"  Platform:            {st.get('platform', '').upper()}")
+            print(f"  Port:                {st.get('port')} ({'LISTENING ✅' if st.get('port_listening') else 'CLOSED ⚪'})")
+            print(f"  Service Active:      {'YES ✅' if st.get('service_active') else 'NO ⚪'}")
+            print(f"  Supervisor Running:  {'YES ✅' if st.get('supervisor_running') else 'NO ⚪'} (PID: {st.get('supervisor_pid') or 'None'})")
+            print(f"  Child Process:       {'RUNNING ✅' if st.get('child_running') else 'STOPPED ⚪'} (PID: {st.get('child_pid') or 'None'})")
+            print(f"  Total Auto-Restarts: {st.get('restarts_count', 0)}")
+            print(f"  Uptime:              {st.get('uptime_seconds', 0):.1f} seconds")
+            print(f"  Last Restart At:     {st.get('last_restart_at') or 'Never'}")
+            print(f"  Last Exit Code:      {st.get('last_exit_code') if st.get('last_exit_code') is not None else 'None'}")
+            print(f"  Boot Auto-Start:     {'INSTALLED ✅' if st.get('autostart_installed') else 'NOT CONFIGURED ⚠️'}")
+            if st.get("autostart_methods"):
+                print(f"  Active Methods:      {', '.join(st.get('autostart_methods'))}\n")
+            else:
+                print()
+
+        elif args.subcommand == "install":
+            print("\n🔧 Installing Venice Key Manager auto-restart and boot services...")
+            res = supervisor.install()
+            if res.get("success"):
+                print("✅ Auto-restart installed successfully!")
+                for m in res.get("messages", []):
+                    print(f"  • {m}")
+                print(f"  Methods: {', '.join(res.get('installed_methods', []))}\n")
+            else:
+                print(f"❌ Installation notice: {res.get('messages')}\n")
+
+        elif args.subcommand == "uninstall":
+            print("\n🗑️ Uninstalling Venice Key Manager auto-restart services...")
+            res = supervisor.uninstall()
+            if res.get("success"):
+                print("✅ Auto-restart removed successfully!")
+                for m in res.get("messages", []):
+                    print(f"  • {m}")
+            else:
+                print("Notice: No active auto-restart services were found to remove.\n")
+
+        elif args.subcommand == "restart":
+            print("\n🔄 Sending restart signal to supervisor...")
+            res = supervisor.request_restart()
+            if res.get("success"):
+                print("✅ Restart signal sent successfully. Supervisor will recycle the process.\n")
+            else:
+                print(f"❌ Failed to request restart: {res.get('error')}\n")
+
+        elif args.subcommand == "supervisor":
+            supervisor.run_supervisor()
+
 
 def main():
     parser = argparse.ArgumentParser(description="Venice & Telegram Key Management Suite")
@@ -268,6 +321,15 @@ def main():
     vault_sub.add_parser("status", help="Show vault disaster recovery health status")
     r_cmd = vault_sub.add_parser("restore", help="Restore vault from specific backup file")
     r_cmd.add_argument("path", help="Path to backup JSON file")
+
+    # Service auto-restart & watchdog commands
+    svc_parser = subparsers.add_parser("service", help="Auto-restart supervisor and OS boot daemon commands")
+    svc_sub = svc_parser.add_subparsers(dest="subcommand")
+    svc_sub.add_parser("status", help="Show auto-restart and supervisor status")
+    svc_sub.add_parser("install", help="Install boot auto-start service for current OS")
+    svc_sub.add_parser("uninstall", help="Uninstall boot auto-start service")
+    svc_sub.add_parser("restart", help="Trigger graceful process restart")
+    svc_sub.add_parser("supervisor", help="Run supervisor watchdog loop")
 
     args = parser.parse_args()
 

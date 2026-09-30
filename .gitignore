@@ -13,6 +13,11 @@ data/state.json
 data/*.db
 data/keys.json
 data/*.log
+.supervisor_state.json
+.supervisor_state.tmp
+.supervisor.log
+.restart_requested
+.launchd.log
 
 # Python
 __pycache__/

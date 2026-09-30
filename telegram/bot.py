@@ -28,6 +28,7 @@ from core.tiers import (
     resolve_model_tier,
     is_tier_allowed
 )
+from core.supervisor import ServiceSupervisor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("venice_tg_bot")
@@ -132,6 +133,9 @@ class VeniceTelegramBot:
                 ],
                 [
                     {"text": "📊 Model Limits", "callback_data": "menu_limits"},
+                    {"text": "🛡️ Auto-Restart & Daemon", "callback_data": "menu_service"}
+                ],
+                [
                     {"text": "🔄 Refresh Dashboard", "callback_data": "menu_main"}
                 ]
             ]
@@ -717,6 +721,44 @@ class VeniceTelegramBot:
             )
             self.edit_message(chat_id, msg_id, txt, reply_markup=self.back_to_main_keyboard())
 
+        elif data == "menu_service":
+            self.answer_callback(cb_id)
+            supervisor = ServiceSupervisor()
+            st = supervisor.get_status()
+            methods_str = ", ".join(st.get("autostart_methods", [])) or "None"
+            txt = (
+                f"🛡️ *Venice Key Manager // Service & Auto-Restart*\n\n"
+                f"• *Platform*: `{st.get('platform', '').upper()}`\n"
+                f"• *Port 8844*: `{'LISTENING ✅' if st.get('port_listening') else 'CLOSED ⚪'}`\n"
+                f"• *Supervisor Watchdog*: `{'ACTIVE ✅' if st.get('supervisor_running') else 'STANDBY / RUNNING DIRECT ⚪'}` (PID: `{st.get('supervisor_pid') or 'None'}`)\n"
+                f"• *Child Process*: `{'RUNNING ✅' if st.get('child_running') else 'DIRECT ⚪'}` (PID: `{st.get('child_pid') or 'None'}`)\n"
+                f"• *Total Auto-Restarts*: `{st.get('restarts_count', 0)}`\n"
+                f"• *Uptime*: `{st.get('uptime_seconds', 0):.1f}s`\n"
+                f"• *Boot Auto-Start*: `{'INSTALLED ✅' if st.get('autostart_installed') else 'NOT CONFIGURED ⚠️'}`\n"
+                f"• *Configured Methods*: `{methods_str}`\n\n"
+                f"The supervisor watchdog monitors process health and relaunches immediately if any crash occurs."
+            )
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "🔄 Recycle / Restart Service", "callback_data": "act_restart_service"}],
+                    [{"text": "« Back to Main Dashboard", "callback_data": "menu_main"}]
+                ]
+            }
+            self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
+
+        elif data == "act_restart_service":
+            self.answer_callback(cb_id, "🔄 Disagreeing process recycle...")
+            supervisor = ServiceSupervisor()
+            res = supervisor.request_restart()
+            if res.get("success"):
+                txt = (
+                    "🔄 *Service Restart Signal Dispatched!*\n\n"
+                    "The supervisor watchdog has been signaled. The background service will recycle and restart automatically within 2 seconds."
+                )
+            else:
+                txt = f"❌ *Restart Signal Failed*: `{res.get('error')}`"
+            self.edit_message(chat_id, msg_id, txt, reply_markup=self.back_to_main_keyboard())
+
     # --- Message Command Handlers ---
 
     def handle_message(self, msg: Dict[str, Any]):
@@ -955,6 +997,31 @@ class VeniceTelegramBot:
                 f"• *Active Venice Keys*: `{st.get('keys_count')}`\n"
                 f"• *Agent Sub-Keys*: `{st.get('subkeys_count')}`"
             )
+        elif text.startswith("/service_status") or text.startswith("/status"):
+            supervisor = ServiceSupervisor()
+            st = supervisor.get_status()
+            methods_str = ", ".join(st.get("autostart_methods", [])) or "None"
+            txt = (
+                "🛡️ *Venice Key Manager // Resilience & Service Status*:\n\n"
+                f"• *Platform*: `{st.get('platform', '').upper()}`\n"
+                f"• *Port 8844*: `{'LISTENING ✅' if st.get('port_listening') else 'CLOSED ⚪'}`\n"
+                f"• *Supervisor*: `{'RUNNING ✅' if st.get('supervisor_running') else 'STANDBY / DIRECT ⚪'}` (PID: `{st.get('supervisor_pid') or 'None'}`)\n"
+                f"• *Child Process*: `{'RUNNING ✅' if st.get('child_running') else 'DIRECT ⚪'}` (PID: `{st.get('child_pid') or 'None'}`)\n"
+                f"• *Total Auto-Restarts*: `{st.get('restarts_count', 0)}`\n"
+                f"• *Uptime*: `{st.get('uptime_seconds', 0):.1f}s`\n"
+                f"• *Last Restart*: `{st.get('last_restart_at') or 'Never'}`\n"
+                f"• *Boot Auto-Start*: `{'INSTALLED ✅' if st.get('autostart_installed') else 'NOT CONFIGURED ⚠️'}`\n"
+                f"• *Methods*: `{methods_str}`"
+            )
+            self.send_message(chat_id, txt, reply_markup=self.back_to_main_keyboard())
+
+        elif text.startswith("/restart_service"):
+            supervisor = ServiceSupervisor()
+            res = supervisor.request_restart()
+            if res.get("success"):
+                txt = "🔄 *Service Restart Signal Dispatched!*\nThe supervisor watchdog will recycle the process within 2s."
+            else:
+                txt = f"❌ *Restart Signal Failed*: `{res.get('error')}`"
             self.send_message(chat_id, txt, reply_markup=self.back_to_main_keyboard())
 
         elif text.startswith("/help"):
@@ -962,6 +1029,8 @@ class VeniceTelegramBot:
                 "⚡ *Venice & TG Engine Commands*:\n\n"
                 "• `/menu` or `/start` - Open interactive control dashboard\n"
                 "• `/provision` - Open Agent Key (XS-XL) Provisioning Wizard\n"
+                "• `/service_status` - Check auto-restart watchdog & boot daemon\n"
+                "• `/restart_service` - Remotely recycle and restart the service\n"
                 "• `/backup_vault` - Create instant snapshot and sync all backup mirrors\n"
                 "• `/recall_vault` - Deep auto-recall and recover keys from mirrors & configs\n"
                 "• `/vault_status` - Check disaster recovery and backup status\n"

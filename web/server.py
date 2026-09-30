@@ -25,6 +25,7 @@ from core.deployer import ConfigDeployer
 from core.tiers import MODEL_TIER_ORDER, MODEL_TIER_MAPPING, is_tier_allowed, resolve_model_tier, get_model_for_tier
 from core.mesh import FleetMeshManager
 from core.tunnel import CloudflareTunnelManager
+from core.supervisor import ServiceSupervisor
 
 logger = logging.getLogger("venice_web")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -135,6 +136,11 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
 
         elif path == "/api/tunnel/status":
             self._send_json(self.tunnel.get_status())
+            return
+
+        elif path == "/api/service/status":
+            supervisor = ServiceSupervisor(root_dir=PROJECT_ROOT)
+            self._send_json(supervisor.get_status())
             return
 
         # 2. Pairing Gate for all other /api/* endpoints
@@ -653,6 +659,16 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
                 self._send_json({"success": False, "error": "Missing backup file path to restore"}, status=400)
                 return
             res = self.vault.restore_from_file(Path(target_path))
+            self._send_json(res)
+
+        elif path == "/api/service/restart":
+            supervisor = ServiceSupervisor(root_dir=PROJECT_ROOT)
+            res = supervisor.request_restart()
+            self._send_json(res)
+
+        elif path == "/api/service/install":
+            supervisor = ServiceSupervisor(root_dir=PROJECT_ROOT)
+            res = supervisor.install()
             self._send_json(res)
 
         else:

@@ -521,6 +521,113 @@ python run.py vault restore ".vault_backups/vault_20260930_020800_manual_check.j
 
 ---
 
+## 🔄 24/7 Auto-Restart, Crash Resilience & OS Boot Daemons
+
+Venice Key Manager features an enterprise-grade multi-tier process supervisor and cross-platform boot daemon architecture guaranteeing continuous 24/7 uptime across system reboots, user logons, and unexpected process crashes.
+
+```mermaid
+flowchart TD
+    subgraph BootDaemons["OS Boot & Logon Auto-Start"]
+        WinBoot["🪟 Windows Startup VBScript\n(%APPDATA%\\...\\Startup\\start_venice_manager.vbs)"]
+        MacBoot["🍎 macOS LaunchAgent\n(~/Library/LaunchAgents/com.venice.keymanager.plist)"]
+        LinuxBoot["🐧 Linux systemd User Service\n(~/.config/systemd/user/venice-key-manager.service)"]
+        A2ALauncher["🌐 A2A Launcher Integration\n(tailscale-a2a-manager launcher.py port 8844 check)"]
+    end
+
+    subgraph Watchdog["Process Supervisor Watchdog (supervisor.py)"]
+        Supervisor["Supervisor Loop (PID tracking, signal traps)"]
+        CrashDetect["Crash & Exit Code Sensor (Ret != 0 / rapid exit tracker)"]
+        Backoff["Exponential Backoff & Thrashing Protection (2s-10s)"]
+        StateLog["Runtime State (.supervisor_state.json & .supervisor.log)"]
+    end
+
+    subgraph Service["Live Service (run.py --all)"]
+        WebDash["Web Dashboard (Port 8844)"]
+        TgBot["Telegram Bot Daemon (@songprocessor_bot)"]
+        CFTunnel["Cloudflare Zero-Trust Tunnel"]
+    end
+
+    WinBoot -->|Silent Logon Launch| Supervisor
+    MacBoot -->|launchd KeepAlive=true| Supervisor
+    LinuxBoot -->|systemd Restart=always| Supervisor
+    A2ALauncher -->|Port Heal on Boot| Supervisor
+
+    Supervisor -->|Spawns Child Process| Service
+    Service -.->|Crashes / Uncaught Exception / Killed| CrashDetect
+    CrashDetect --> Backoff
+    Backoff --> StateLog
+    Backoff -->|Immediate Auto-Relaunch| Supervisor
+    Supervisor -->|Spawns New Healthy Child| Service
+```
+
+### 1. Process Supervisor Watchdog (`supervisor.py`)
+* **Zero External Dependencies**: Operates with pure standard library Python, enabling execution in any environment.
+* **Instant Auto-Restart**: If the service process crashes, runs out of memory, or exits unexpectedly, the supervisor logs the exit code and relaunches it automatically in 2 seconds.
+* **Rapid-Crash Backoff Defense**: If the process crashes repeatedly in under 3 seconds, the supervisor dynamically backs off up to 10 seconds to protect CPU resources.
+* **Live Telemetry & State Tracking**: Uptime, child process PID, restart counts, and crash history are persisted atomically in `.supervisor_state.json`.
+* **Zero-Downtime Remote IPC**: Supports graceful process recycling on-demand via the `.restart_requested` sentinel file, REST API (`POST /api/service/restart`), or Telegram (`/restart_service`).
+
+### 2. Cross-Platform 1-Click Boot Installation
+Auto-start on boot is supported across all major operating systems out of the box:
+
+#### 🪟 Windows Workstation (`planetaryexplorer`)
+Installs a silent VBScript in the Windows Startup folder and integrates with the A2A fleet launcher. Runs completely in the background without any CMD window popups:
+```powershell
+# 1-Click PowerShell Installer
+powershell -ExecutionPolicy Bypass -File scripts\install_auto_restart.ps1
+
+# Or via CLI
+python run.py service install
+```
+
+#### 🍎 macOS (Apple Silicon `mcmini`)
+Configures a native macOS `LaunchAgent` plist (`~/Library/LaunchAgents/com.venice.keymanager.plist`) using Apple's in-kernel `launchd` supervisor with `<key>KeepAlive</key><true/>` and `<key>RunAtLoad</key><true/>`:
+```bash
+# 1-Click Bash Installer
+bash scripts/install_auto_restart.sh
+
+# Or via CLI
+python run.py service install
+```
+
+#### 🐧 Linux Nodes
+Installs and enables a systemd user or system unit (`~/.config/systemd/user/venice-key-manager.service`) with `Restart=always` and `RestartSec=3`:
+```bash
+# 1-Click Bash Installer
+bash scripts/install_auto_restart.sh
+```
+
+### 3. Unified CLI Commands
+Inspect, control, and install the service directly from `run.py` or `supervisor.py`:
+```bash
+# Check supervisor status, uptime, child PID, and boot auto-start methods
+python run.py service status
+
+# Install OS boot auto-start daemon for the current machine
+python run.py service install
+
+# Remove OS boot auto-start daemon
+python run.py service uninstall
+
+# Request an immediate graceful restart of the supervised service
+python run.py service restart
+
+# Run the supervisor watchdog in foreground mode
+python run.py service supervisor
+```
+
+### 4. Interactive Telegram Bot Controls
+* `/service_status` or `/status`: Displays supervisor status, port listening state, PID, uptime, restart counts, and active boot methods.
+* `/restart_service`: Remotely signals the supervisor to recycle and restart the service within 2 seconds.
+* **Dashboard Button**: Tap `[ 🛡️ Auto-Restart & Daemon ]` on the interactive `/menu` dashboard to view real-time health and trigger remote restarts.
+
+### 5. Web Dashboard Resilience Panel
+* Navigate to **⚙️ Vault & Settings** &rarr; **🚀 Process Supervisor & 24/7 Auto-Restart Watchdog**.
+* View real-time status badges for **Watchdog Status**, **Boot Auto-Start**, **Process Uptime**, and **Total Auto-Restarts**.
+* 1-click **Re-install Boot Service** and **Recycle / Restart Service** buttons.
+
+---
+
 ## 🔒 Security & Privacy Guarantees
 
 * **Zero Plaintext Secrets in Git**: Secret keys, environment files, and credentials are never checked into version control.
