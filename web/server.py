@@ -239,6 +239,15 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
                 "base_url": self.vault.data.get("venice", {}).get("base_url")
             })
 
+        elif path == "/api/vault/status":
+            self._send_json(self.vault.get_backup_status())
+
+        elif path == "/api/vault/backups":
+            self._send_json({
+                "success": True,
+                "backups": self.vault.list_backups()
+            })
+
         else:
             # Serve static files
             super().do_GET()
@@ -627,6 +636,24 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
                 self.vault.data.setdefault("telegram", {})["authorized_chat_id"] = str(body["authorized_chat_id"])
                 self.vault._save()
             self._send_json({"success": True, "message": "Configuration updated"})
+
+        elif path == "/api/vault/backup":
+            label = body.get("label", "")
+            res = self.vault.create_backup(label=label)
+            self._send_json(res)
+
+        elif path == "/api/vault/recall":
+            sync_remote = body.get("sync_remote", True)
+            res = self.vault.auto_recall(sync_venice_remote=sync_remote)
+            self._send_json(res)
+
+        elif path == "/api/vault/restore":
+            target_path = body.get("path")
+            if not target_path:
+                self._send_json({"success": False, "error": "Missing backup file path to restore"}, status=400)
+                return
+            res = self.vault.restore_from_file(Path(target_path))
+            self._send_json(res)
 
         else:
             self._send_json({"error": "Endpoint not found"}, status=404)

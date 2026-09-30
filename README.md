@@ -420,6 +420,107 @@ Whenever code updates are pushed to GitHub, you can keep all fleet machines runn
 
 ---
 
+## 🛡️ Multi-Store Vault Backup, Crash Resilience & Disaster Recovery
+
+Venice Key Manager features an enterprise-grade automated multi-store persistence and crash-resilient disaster recovery architecture. This ensures that sudden machine reboots, unexpected service restarts, power outages, and OS updates never corrupt or wipe your Venice Admin Keys, Inference Keys, Telegram bot tokens, or agent sub-keys.
+
+```mermaid
+flowchart TD
+    subgraph ActiveOperations["Live Key Management Operations"]
+        UI["🖥️ Web Dashboard (Port 8844)"]
+        TG["🤖 Telegram Bot (@songprocessor_bot)"]
+        CLI["💻 CLI (python run.py ...)"]
+        REST["🌐 REST API / Agent Calls"]
+    end
+
+    subgraph AtomicStore["Durable Atomic Engine (core/vault.py)"]
+        Fsync["Atomic Temp File Write + os.fsync()"]
+        Guard["Safety Guard: Prevent Blank Overwrite"]
+        AutoRecall["Deep Auto-Recall & Merge Engine"]
+    end
+
+    subgraph PersistenceTiers["Multi-Tier Redundant Storage"]
+        Primary["1️⃣ Primary Vault\n(venice_vault.json)"]
+        LocalMirror["2️⃣ Local Mirror\n(venice_vault.backup.json)"]
+        ProfileMirror["3️⃣ OS Profile Mirror\n(~/.venice/venice_vault_backup.json\nor %LOCALAPPDATA%/venice/...)"]
+        Snapshots["4️⃣ Versioned Snapshots\n(.vault_backups/vault_*.json\nAuto-rotated, latest 20)"]
+    end
+
+    subgraph DiscoverySources["Disaster Auto-Discovery Sources"]
+        AgentYAML["📄 Agent YAML Configs\n(D:\\hermes-music\\data\\config.yaml, etc.)"]
+        EnvFiles["🔐 Agent .env Files\n(D:\\hermes-music\\.env, etc.)"]
+        SystemEnv["⚙️ Environment Variables\n(VENICE_ADMIN_KEY, etc.)"]
+        VeniceCloud["☁️ Venice.ai Cloud API\n(/api_keys fleet sync)"]
+    end
+
+    UI --> AtomicStore
+    TG --> AtomicStore
+    CLI --> AtomicStore
+    REST --> AtomicStore
+
+    AtomicStore --> Fsync
+    Fsync --> Primary
+    Fsync --> LocalMirror
+    Fsync --> ProfileMirror
+    Fsync --> Snapshots
+
+    Primary -.->|Corrupted or Deleted on Reboot| AutoRecall
+    AutoRecall --> LocalMirror
+    AutoRecall --> ProfileMirror
+    AutoRecall --> Snapshots
+    AutoRecall --> AgentYAML
+    AutoRecall --> EnvFiles
+    AutoRecall --> SystemEnv
+    AutoRecall --> VeniceCloud
+    AutoRecall -->|Restores Clean Durable State| Primary
+```
+
+### 1. Multi-Tier Redundant Storage Tiers
+* **Primary Store (`venice_vault.json`)**: Live vault queried by dashboard, Telegram bot, and MCP server. Written atomically using temporary files and hardware `os.fsync()` flushing before replacement.
+* **Secondary Mirror (`venice_vault.backup.json`)**: Exact synchronized mirror maintained in real-time on every save.
+* **User-Profile Mirror (`~/.venice/venice_vault_backup.json` / `%LOCALAPPDATA%\venice\`)**: Stored in user application data outside the repository directory. Survives branch switches, scratch cleanup scripts, and repository re-clones.
+* **Rolling Snapshots (`.vault_backups/vault_YYYYMMDD_HHMMSS.json`)**: Timestamped versioned snapshots created on configuration changes. Automatically rotated to retain the 20 most recent snapshots.
+
+### 2. Intelligent Auto-Recall on Startup
+If the host computer restarts unexpectedly, or if the primary vault file is ever corrupted, missing, or has empty key fields:
+1. `KeyVault` automatically inspects the backup mirrors and restores the latest valid snapshot.
+2. If corrupted data was found, the damaged file is preserved in `.vault_backups/corrupt_*` for forensic analysis.
+3. The engine automatically scans canonical agent YAML files (`config.yaml`), agent `.env` files, and system environment variables (`VENICE_ADMIN_KEY`, `VENICE_INFERENCE_KEY`, `TELEGRAM_BOT_TOKEN`) to recall any missing credentials.
+4. If an Admin Key is configured or recovered, `KeyVault` automatically contacts the Venice API (`/api_keys`) to sync and repopulate the complete catalog of issued keys.
+5. The **Safety Guard** actively blocks empty templates from overwriting existing keys unless explicitly forced.
+
+### 3. CLI Management Commands
+Manage backups, trigger recall, and inspect disaster recovery status directly via the unified CLI:
+```bash
+# Check disaster recovery health, mirrors, and snapshot counts
+python run.py vault status
+
+# Create an instant labeled backup snapshot across all stores
+python run.py vault backup "pre_upgrade"
+
+# Perform a deep auto-recall and sync across mirrors, configs, and Venice API
+python run.py vault recall
+
+# List all available backup snapshots with metadata
+python run.py vault list
+
+# Restore vault from a specific snapshot file
+python run.py vault restore ".vault_backups/vault_20260930_020800_manual_check.json"
+```
+
+### 4. Interactive Telegram Bot Commands
+* `/backup_vault` or `/backup`: Creates an instant snapshot and confirms sync status to the authorized chat.
+* `/recall_vault` or `/recall`: Triggers deep auto-recall and reports recovered keys.
+* `/vault_status`: Displays primary vault size, mirror statuses, snapshot count, and active key health.
+* **Interactive Dashboard Buttons**: Tap `[ 💾 Backup Vault ]` and `[ 🔄 Recall Keys ]` in the `/menu` dashboard.
+
+### 5. Web Dashboard Disaster Recovery Panel
+* Navigate to **⚙️ Vault & Settings** &rarr; **🛡️ Multi-Store Vault Backup & Disaster Recovery**.
+* View real-time status badges for Primary Vault, Local Backup Mirror, and User Profile Mirror.
+* 1-click **Create Instant Backup**, **Auto-Recall & Recover Keys**, and **View Snapshots** modal with 1-click snapshot restoration.
+
+---
+
 ## 🔒 Security & Privacy Guarantees
 
 * **Zero Plaintext Secrets in Git**: Secret keys, environment files, and credentials are never checked into version control.

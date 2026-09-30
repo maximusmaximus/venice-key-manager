@@ -173,6 +173,61 @@ def handle_cli_commands(args):
                 print(f"  {step}")
             print()
 
+    elif args.command == "vault":
+        if args.subcommand == "backup":
+            label = getattr(args, "label", "") or ""
+            res = vault.create_backup(label=label)
+            print(f"\n💾 Vault Backup Snapshot Created:")
+            print(f"  Path:       {res.get('path')}")
+            print(f"  Size:       {res.get('size_bytes')} bytes")
+            print(f"  Keys:       {res.get('keys_count')} Venice keys")
+            print(f"  Sub-keys:   {res.get('subkeys_count')} agent sub-keys")
+            print(f"  Admin Key:  {'Configured' if res.get('has_admin_key') else 'No'}\n")
+
+        elif args.subcommand == "recall":
+            print("\n🔄 Running deep auto-recall across backup mirrors, configs, and Venice API...")
+            res = vault.auto_recall(sync_venice_remote=True)
+            print(f"  ✅ Auto-Recall Completed!")
+            print(f"  Admin Key Recalled:     {res.get('recovered_admin_key')}")
+            print(f"  Inference Key Recalled: {res.get('recovered_inference_key')}")
+            print(f"  Remote Keys Synced:     {res.get('remote_keys_synced')}")
+            print(f"  Total Venice Keys:      {res.get('total_venice_keys')}")
+            print(f"  Total Sub-keys:         {res.get('total_subkeys')}\n")
+
+        elif args.subcommand == "list":
+            snaps = vault.list_backups()
+            print(f"\n📋 Available Vault Backups ({len(snaps)}):")
+            for s in snaps:
+                print(f"  • {s.get('filename')} [{s.get('type')}]")
+                print(f"    Modified: {s.get('modified_at')} | Size: {s.get('size_bytes')} B")
+                print(f"    Keys: {s.get('keys_count')} | Subkeys: {s.get('subkeys_count')} | Admin: {s.get('has_admin_key')}")
+                print(f"    Path: {s.get('path')}\n")
+
+        elif args.subcommand == "status":
+            st = vault.get_backup_status()
+            print(f"\n🛡️ Key Vault Backup & Health Status:")
+            print(f"  Primary Vault:      {st.get('vault_path')} ({st.get('vault_size_bytes')} B)")
+            print(f"  Backup Mirror:      {'EXISTS ✅' if st.get('backup_mirror_exists') else 'MISSING ⚠️'}")
+            print(f"  Profile Mirror:     {'EXISTS ✅' if st.get('user_profile_mirror_exists') else 'MISSING ⚠️'}")
+            print(f"  Snapshots Saved:    {st.get('total_snapshots')}")
+            print(f"  Last Backup:        {st.get('last_backup_at') or 'None'}")
+            print(f"  Admin Key:          {'CONFIGURED' if st.get('has_admin_key') else 'NOT SET'}")
+            print(f"  Inference Key:      {'CONFIGURED' if st.get('has_inference_key') else 'NOT SET'}")
+            print(f"  Active Venice Keys: {st.get('keys_count')}")
+            print(f"  Agent Sub-keys:     {st.get('subkeys_count')}\n")
+
+        elif args.subcommand == "restore":
+            p = getattr(args, "path", None)
+            if not p:
+                print("❌ Specify backup file path to restore: python run.py vault restore <path>")
+                return
+            res = vault.restore_from_file(Path(p))
+            if res.get("success"):
+                print(f"\n✅ Restored vault from: {res.get('restored_from')}")
+                print(f"  Keys: {res.get('keys_count')} | Subkeys: {res.get('subkeys_count')}\n")
+            else:
+                print(f"\n❌ Restore failed: {res.get('error')}\n")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Venice & Telegram Key Management Suite")
@@ -202,6 +257,17 @@ def main():
     ping_cmd.add_argument("agent", nargs="?", default="primary-agent", help="Agent name")
     wiz_cmd = tg_sub.add_parser("wizard", help="Show @BotFather wizard")
     wiz_cmd.add_argument("agent", nargs="?", default="worker-agent", help="Agent name")
+
+    # Vault backup & disaster recovery commands
+    vault_parser = subparsers.add_parser("vault", help="Vault backup and disaster recovery commands")
+    vault_sub = vault_parser.add_subparsers(dest="subcommand")
+    b_cmd = vault_sub.add_parser("backup", help="Create instant backup snapshot")
+    b_cmd.add_argument("label", nargs="?", default="", help="Optional label for snapshot")
+    vault_sub.add_parser("recall", help="Auto-recall missing keys from all mirrors, configs, and Venice API")
+    vault_sub.add_parser("list", help="List all backup snapshots")
+    vault_sub.add_parser("status", help="Show vault disaster recovery health status")
+    r_cmd = vault_sub.add_parser("restore", help="Restore vault from specific backup file")
+    r_cmd.add_argument("path", help="Path to backup JSON file")
 
     args = parser.parse_args()
 

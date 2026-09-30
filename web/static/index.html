@@ -387,6 +387,46 @@
           </div>
           <button class="btn btn-secondary" id="btn-save-tg-settings">Update Settings</button>
         </div>
+
+        <!-- Card 3: Vault Backup & Disaster Recovery -->
+        <div class="card" style="grid-column: 1 / -1; margin-top: 10px; border: 1px solid var(--accent-purple);">
+          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 14px;">
+            <div>
+              <h3 class="card-title" style="margin-bottom: 4px;">🛡️ Multi-Store Vault Backup & Disaster Recovery</h3>
+              <p class="text-muted" style="font-size: 13px; margin: 0;">Automated multi-tier persistence protecting Venice & Telegram keys across computer restarts, power outages, and OS updates.</p>
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <button class="btn btn-primary btn-sm" id="btn-create-backup">
+                <span>💾</span> Create Instant Backup
+              </button>
+              <button class="btn btn-secondary btn-sm" id="btn-auto-recall-vault">
+                <span>🔄</span> Auto-Recall & Recover Keys
+              </button>
+              <button class="btn btn-secondary btn-sm" id="btn-view-backups">
+                <span>📋</span> View Snapshots (<span id="val-backup-count">--</span>)
+              </button>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; background: var(--bg-input); padding: 14px; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+            <div>
+              <div class="text-dim" style="font-size: 11px; font-weight: 700; text-transform: uppercase;">Primary Vault Store</div>
+              <div id="stat-primary-vault" style="font-weight: 600; margin-top: 4px; font-size: 13px;">Checking...</div>
+            </div>
+            <div>
+              <div class="text-dim" style="font-size: 11px; font-weight: 700; text-transform: uppercase;">Local Backup Mirror</div>
+              <div id="stat-backup-mirror" style="font-weight: 600; margin-top: 4px; font-size: 13px;">Checking...</div>
+            </div>
+            <div>
+              <div class="text-dim" style="font-size: 11px; font-weight: 700; text-transform: uppercase;">User Profile Mirror</div>
+              <div id="stat-profile-mirror" style="font-weight: 600; margin-top: 4px; font-size: 13px;">Checking...</div>
+            </div>
+            <div>
+              <div class="text-dim" style="font-size: 11px; font-weight: 700; text-transform: uppercase;">Last Synchronized Snapshot</div>
+              <div id="stat-last-backup" style="font-weight: 600; margin-top: 4px; font-size: 13px;">--</div>
+            </div>
+          </div>
+        </div>
       </div>
     </main>
 
@@ -740,6 +780,44 @@
         <button class="btn btn-primary" id="btn-confirm-create-subkey" type="button">
           <span>⚡</span> Mint & Deploy Sub-Key
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Vault Backups History -->
+  <div class="modal-overlay" id="modal-vault-backups">
+    <div class="modal card" style="max-width: 820px; width: 95%;">
+      <div class="modal-header">
+        <h3 class="modal-title">📋 Vault Backup Snapshots & Disaster Recovery</h3>
+        <button class="modal-close" onclick="closeModal('modal-vault-backups')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted" style="font-size: 13px; margin-bottom: 14px;">
+          All rolling snapshots and multi-tier persistent mirrors stored on this machine:
+        </p>
+        <div class="table-container" style="max-height: 380px; overflow-y: auto;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Snapshot / Mirror</th>
+                <th>Type</th>
+                <th>Size</th>
+                <th>Keys / Subkeys</th>
+                <th>Modified</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-vault-backups">
+              <tr><td colspan="6" class="text-center text-muted">Loading snapshots...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+        <button class="btn btn-secondary btn-sm" id="btn-modal-auto-recall">
+          <span>🔄</span> Deep Auto-Recall
+        </button>
+        <button class="btn btn-primary btn-sm" onclick="closeModal('modal-vault-backups')">Close</button>
       </div>
     </div>
   </div>

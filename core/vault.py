@@ -1,52 +1,202 @@
 """
 Key Vault & Configuration Store for Venice.ai & Telegram Agent Bots.
-Persists managed keys, agent mappings, and configuration to a local JSON vault.
+Persists managed keys, agent mappings, and configuration with automated atomic
+persistence, multi-tier secure backup snapshots, and crash-resilient auto-recall.
 """
 
 import json
+import logging
 import os
 import shutil
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-VAULT_FILE = Path(__file__).resolve().parent.parent / "venice_vault.json"
+logger = logging.getLogger("venice_vault")
+
+# Paths & Directories
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+VAULT_FILE = PROJECT_ROOT / "venice_vault.json"
+BACKUP_VAULT_FILE = PROJECT_ROOT / "venice_vault.backup.json"
+BACKUP_DIR = PROJECT_ROOT / ".vault_backups"
+
+# Resilient user-profile mirrors (survives scratch cleanups, branch changes, and re-clones)
+if os.name == "nt":
+    _local_appdata = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+    USER_PROFILE_BACKUP = Path(_local_appdata) / "venice" / "venice_vault_backup.json"
+else:
+    USER_PROFILE_BACKUP = Path.home() / ".config" / "venice" / "venice_vault_backup.json"
+HOME_VENICE_BACKUP = Path.home() / ".venice" / "venice_vault_backup.json"
+
 DEFAULT_CONFIG_PATH = Path(os.environ.get("AGENT_CONFIG_PATH", "config.yaml"))
+
+# Canonical locations for agent configs and env files
+KNOWN_CONFIG_PATHS = [
+    Path(r"D:\hermes-music\data\config.yaml"),
+    Path(r"C:\Users\maxin\.gemini\antigravity\scratch\a2a-server\config.yaml"),
+    Path(r"D:\hermes-music\data\dawagent_config.yaml"),
+    Path(r"D:\hermes-music\data\worker_config.yaml"),
+    PROJECT_ROOT / "config.yaml",
+    Path("config.yaml"),
+]
+
+KNOWN_ENV_FILES = [
+    Path(r"D:\hermes-music\.env"),
+    Path(r"D:\hermes-music\data\.env"),
+    PROJECT_ROOT / ".env",
+    Path(".env"),
+    Path.home() / ".venice" / ".env",
+]
+
+
+def _read_json_file(path: Path) -> Optional[Dict[str, Any]]:
+    """Safely reads and parses a JSON file. Returns None if unreadable or invalid."""
+    if not path.exists() or path.stat().st_size == 0:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else None
+    except Exception as e:
+        logger.warning(f"Error reading JSON from {path}: {e}")
+        return None
+
+
+def _atomic_write_json(path: Path, data: Dict[str, Any]) -> bool:
+    """
+    Atomically writes dictionary to JSON file with forced disk flush (fsync)
+    to prevent file corruption during sudden restarts or power loss.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_name = f".tmp_{os.getpid()}_{int(time.time() * 1000)}.tmp"
+        tmp_path = path.parent / tmp_name
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(str(tmp_path), str(path))
+        return True
+    except Exception as e:
+        logger.error(f"Failed to atomically write {path}: {e}")
+        return False
+
+
+def _has_valuable_keys(data: Dict[str, Any]) -> bool:
+    """Checks whether the dictionary contains valuable secret keys."""
+    if not isinstance(data, dict):
+        return False
+    venice = data.get("venice", {})
+    tg = data.get("telegram", {})
+    subkeys = data.get("subkeys", [])
+    if venice.get("admin_key") or venice.get("inference_key") or venice.get("keys"):
+        return True
+    if tg.get("master_bot_token") or tg.get("agent_bots"):
+        return True
+    if subkeys:
+        return True
+    return False
+
+
+def _extract_from_env_file(path: Path) -> Dict[str, str]:
+    """Extracts Venice and Telegram variables from a .env file."""
+    res = {}
+    if not path.exists():
+        return res
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip("'\"")
+                if k in (
+                    "VENICE_API_KEY",
+                    "VENICE_INFERENCE_KEY",
+                    "VENICE_ADMIN_KEY",
+                    "TELEGRAM_BOT_TOKEN",
+                    "TELEGRAM_CHAT_ID",
+                    "SECURE_PAIRING_CODE",
+                    "CLOUDFLARE_DOMAIN"
+                ) and v:
+                    res[k] = v
+    except Exception:
+        pass
+    return res
+
+
+def _extract_from_yaml_file(path: Path) -> Dict[str, str]:
+    """Extracts model.api_key and channels.telegram.bot_token from a YAML config."""
+    res = {}
+    if not path.exists():
+        return res
+    try:
+        import yaml
+        with open(path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        if isinstance(cfg, dict):
+            api_key = cfg.get("model", {}).get("api_key", "")
+            bot_token = cfg.get("channels", {}).get("telegram", {}).get("bot_token", "")
+            if api_key:
+                res["VENICE_INFERENCE_KEY"] = api_key
+            if bot_token:
+                res["TELEGRAM_BOT_TOKEN"] = bot_token
+    except Exception:
+        pass
+    return res
 
 
 class KeyVault:
     def __init__(self, vault_path: Optional[Path] = None):
         self.vault_path = vault_path or VAULT_FILE
+        self.backup_path = self.vault_path.with_suffix(".backup.json")
+        if self.vault_path == VAULT_FILE:
+            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         self.data: Dict[str, Any] = self._load()
 
     def _default_data(self) -> Dict[str, Any]:
+        """Constructs default vault template and attempts initial auto-discovery."""
         venice_inf_key = os.environ.get("VENICE_INFERENCE_KEY") or os.environ.get("VENICE_API_KEY", "")
         venice_admin_key = os.environ.get("VENICE_ADMIN_KEY", "")
         tg_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
         tg_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-        config_file = Path(os.environ.get("AGENT_CONFIG_PATH", "config.yaml"))
 
-        # Auto-discover from config file if available
-        if config_file.exists():
-            try:
-                import yaml
-                with open(config_file, "r", encoding="utf-8") as f:
-                    cfg = yaml.safe_load(f) or {}
-                if not venice_inf_key:
-                    venice_inf_key = cfg.get("model", {}).get("api_key", "")
-                if not tg_bot_token:
-                    tg_bot_token = cfg.get("channels", {}).get("telegram", {}).get("bot_token", "")
-            except Exception:
-                pass
+        # Auto-discover from known configs and .env files
+        for p in KNOWN_CONFIG_PATHS:
+            if p.exists():
+                extracted = _extract_from_yaml_file(p)
+                if not venice_inf_key and "VENICE_INFERENCE_KEY" in extracted:
+                    venice_inf_key = extracted["VENICE_INFERENCE_KEY"]
+                if not tg_bot_token and "TELEGRAM_BOT_TOKEN" in extracted:
+                    tg_bot_token = extracted["TELEGRAM_BOT_TOKEN"]
+
+        for p in KNOWN_ENV_FILES:
+            if p.exists():
+                extracted = _extract_from_env_file(p)
+                if not venice_inf_key and "VENICE_API_KEY" in extracted:
+                    venice_inf_key = extracted["VENICE_API_KEY"]
+                if not venice_inf_key and "VENICE_INFERENCE_KEY" in extracted:
+                    venice_inf_key = extracted["VENICE_INFERENCE_KEY"]
+                if not venice_admin_key and "VENICE_ADMIN_KEY" in extracted:
+                    venice_admin_key = extracted["VENICE_ADMIN_KEY"]
+                if not tg_bot_token and "TELEGRAM_BOT_TOKEN" in extracted:
+                    tg_bot_token = extracted["TELEGRAM_BOT_TOKEN"]
+                if not tg_chat_id and "TELEGRAM_CHAT_ID" in extracted:
+                    tg_chat_id = extracted["TELEGRAM_CHAT_ID"]
+
+        config_file = str(KNOWN_CONFIG_PATHS[0]) if KNOWN_CONFIG_PATHS[0].exists() else "config.yaml"
 
         default_agent_bots = {}
         if tg_bot_token:
-            default_agent_bots["primary-agent"] = {
-                "agent_name": "primary-agent",
+            default_agent_bots["hermes-music"] = {
+                "agent_name": "hermes-music",
                 "bot_token": tg_bot_token,
-                "config_path": str(config_file),
+                "config_path": config_file,
                 "created_at": datetime.utcnow().isoformat() + "Z",
-                "notes": "Primary agent communication bot"
+                "notes": "Primary Hermes music & publishing bot"
             }
 
         return {
@@ -60,7 +210,7 @@ class KeyVault:
             },
             "telegram": {
                 "master_bot_token": tg_bot_token,
-                "authorized_chat_id": tg_chat_id,
+                "authorized_chat_id": tg_chat_id or os.environ.get("TELEGRAM_CHAT_ID", ""),
                 "mtproto": {
                     "api_id": os.environ.get("TELEGRAM_API_ID", ""),
                     "api_hash": os.environ.get("TELEGRAM_API_HASH", ""),
@@ -70,33 +220,431 @@ class KeyVault:
                 "agent_bots": default_agent_bots
             },
             "deployments": {
-                "primary-agent": {
-                    "config_path": str(config_file),
+                "hermes-music": {
+                    "config_path": config_file,
                     "venice_key_field": "model.api_key",
                     "tg_token_field": "channels.telegram.bot_token"
                 }
-            }
+            },
+            "security": {
+                "pairing_code": os.environ.get("SECURE_PAIRING_CODE", "VK-AB67CA09"),
+                "require_pairing": True
+            },
+            "cloudflare": {
+                "domain": os.environ.get("CLOUDFLARE_DOMAIN", "venice.vmu.cash")
+            },
+            "subkeys": []
         }
 
-    def _load(self) -> Dict[str, Any]:
-        if not self.vault_path.exists():
-            defaults = self._default_data()
-            self._save(defaults)
-            return defaults
-        try:
-            with open(self.vault_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return self._default_data()
+    def _find_newest_valid_backup(self) -> Optional[Dict[str, Any]]:
+        """Scans all backup stores and returns the newest valid snapshot with keys."""
+        candidates = []
 
-    def _save(self, data: Optional[Dict[str, Any]] = None) -> None:
+        # 1. Vault's dedicated backup file
+        d_self = _read_json_file(self.backup_path)
+        if d_self and _has_valuable_keys(d_self):
+            candidates.append((self.backup_path.stat().st_mtime, d_self, self.backup_path))
+
+        # If custom vault path (e.g. unit test), do not mix with production fleet backups
+        if self.vault_path != VAULT_FILE:
+            return candidates[0][1] if candidates else None
+
+        # 2. Primary backup file
+        d1 = _read_json_file(BACKUP_VAULT_FILE)
+        if d1 and _has_valuable_keys(d1):
+            candidates.append((BACKUP_VAULT_FILE.stat().st_mtime, d1, BACKUP_VAULT_FILE))
+
+        # 3. User profile backups
+        for up in (USER_PROFILE_BACKUP, HOME_VENICE_BACKUP):
+            d2 = _read_json_file(up)
+            if d2 and _has_valuable_keys(d2):
+                candidates.append((up.stat().st_mtime, d2, up))
+
+        # 4. Rolling snapshots in .vault_backups/
+        if BACKUP_DIR.exists():
+            for snap in sorted(BACKUP_DIR.glob("vault_*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+                d3 = _read_json_file(snap)
+                if d3 and _has_valuable_keys(d3):
+                    candidates.append((snap.stat().st_mtime, d3, snap))
+                    break
+
+        if not candidates:
+            return None
+
+        # Sort by modification time descending
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1]
+
+    def _auto_recall_missing_fields(self, data: Dict[str, Any]) -> bool:
+        """
+        Inspects data for missing keys or empty configs and recovers them
+        from backup mirrors, known agent YAML configs, and .env files.
+        Returns True if any fields were recalled and merged.
+        """
+        changed = False
+        venice = data.setdefault("venice", {})
+        telegram = data.setdefault("telegram", {})
+        security = data.setdefault("security", {})
+        cloudflare = data.setdefault("cloudflare", {})
+
+        # Step A: Check newest valid backup snapshot to fill missing items
+        backup_candidate = self._find_newest_valid_backup()
+        if backup_candidate:
+            b_venice = backup_candidate.get("venice", {})
+            b_tg = backup_candidate.get("telegram", {})
+            b_sec = backup_candidate.get("security", {})
+            b_cf = backup_candidate.get("cloudflare", {})
+            b_subkeys = backup_candidate.get("subkeys", [])
+
+            if not venice.get("admin_key") and b_venice.get("admin_key"):
+                venice["admin_key"] = b_venice["admin_key"]
+                changed = True
+                logger.info("Recalled Venice Admin Key from backup store")
+
+            if not venice.get("inference_key") and b_venice.get("inference_key"):
+                venice["inference_key"] = b_venice["inference_key"]
+                changed = True
+                logger.info("Recalled Venice Inference Key from backup store")
+
+            if not venice.get("keys") and b_venice.get("keys"):
+                venice["keys"] = b_venice["keys"]
+                changed = True
+                logger.info(f"Recalled {len(b_venice['keys'])} Venice keys from backup store")
+
+            if not telegram.get("master_bot_token") and b_tg.get("master_bot_token"):
+                telegram["master_bot_token"] = b_tg["master_bot_token"]
+                changed = True
+                logger.info("Recalled Telegram master bot token from backup store")
+
+            if not telegram.get("agent_bots") and b_tg.get("agent_bots"):
+                telegram["agent_bots"] = b_tg["agent_bots"]
+                changed = True
+
+            if not security.get("pairing_code") and b_sec.get("pairing_code"):
+                security["pairing_code"] = b_sec["pairing_code"]
+                changed = True
+
+            if not cloudflare.get("domain") and b_cf.get("domain"):
+                cloudflare["domain"] = b_cf["domain"]
+                changed = True
+
+            if not data.get("subkeys") and b_subkeys:
+                data["subkeys"] = b_subkeys
+                changed = True
+                logger.info(f"Recalled {len(b_subkeys)} agent sub-keys from backup store")
+
+        # Step B: Check known agent YAML configs
+        for cp in KNOWN_CONFIG_PATHS:
+            if cp.exists():
+                cfg = _extract_from_yaml_file(cp)
+                if not venice.get("inference_key") and cfg.get("VENICE_INFERENCE_KEY"):
+                    venice["inference_key"] = cfg["VENICE_INFERENCE_KEY"]
+                    changed = True
+                    logger.info(f"Recalled inference key from {cp}")
+                if not telegram.get("master_bot_token") and cfg.get("TELEGRAM_BOT_TOKEN"):
+                    telegram["master_bot_token"] = cfg["TELEGRAM_BOT_TOKEN"]
+                    changed = True
+                    logger.info(f"Recalled telegram bot token from {cp}")
+
+        # Step C: Check known .env files
+        for ep in KNOWN_ENV_FILES:
+            if ep.exists():
+                env_vals = _extract_from_env_file(ep)
+                if not venice.get("admin_key") and env_vals.get("VENICE_ADMIN_KEY"):
+                    venice["admin_key"] = env_vals["VENICE_ADMIN_KEY"]
+                    changed = True
+                if not venice.get("inference_key") and (env_vals.get("VENICE_INFERENCE_KEY") or env_vals.get("VENICE_API_KEY")):
+                    venice["inference_key"] = env_vals.get("VENICE_INFERENCE_KEY") or env_vals.get("VENICE_API_KEY")
+                    changed = True
+                if not telegram.get("master_bot_token") and env_vals.get("TELEGRAM_BOT_TOKEN"):
+                    telegram["master_bot_token"] = env_vals["TELEGRAM_BOT_TOKEN"]
+                    changed = True
+                if not telegram.get("authorized_chat_id") and env_vals.get("TELEGRAM_CHAT_ID"):
+                    telegram["authorized_chat_id"] = env_vals["TELEGRAM_CHAT_ID"]
+                    changed = True
+
+        # Step D: Check environment variables
+        if not venice.get("admin_key") and os.environ.get("VENICE_ADMIN_KEY"):
+            venice["admin_key"] = os.environ["VENICE_ADMIN_KEY"].strip()
+            changed = True
+        if not venice.get("inference_key") and (os.environ.get("VENICE_INFERENCE_KEY") or os.environ.get("VENICE_API_KEY")):
+            venice["inference_key"] = (os.environ.get("VENICE_INFERENCE_KEY") or os.environ.get("VENICE_API_KEY")).strip()
+            changed = True
+        if not telegram.get("master_bot_token") and os.environ.get("TELEGRAM_BOT_TOKEN"):
+            telegram["master_bot_token"] = os.environ["TELEGRAM_BOT_TOKEN"].strip()
+            changed = True
+
+        # Ensure defaults for pairing & domain
+        if not security.get("pairing_code"):
+            security["pairing_code"] = "VK-AB67CA09"
+            changed = True
+        if not cloudflare.get("domain"):
+            cloudflare["domain"] = "venice.vmu.cash"
+            changed = True
+
+        # Ensure agent_bots has hermes-music if bot_token is known
+        bots = telegram.setdefault("agent_bots", {})
+        if telegram.get("master_bot_token") and "hermes-music" not in bots:
+            bots["hermes-music"] = {
+                "agent_name": "hermes-music",
+                "bot_token": telegram["master_bot_token"],
+                "bot_id": 8973378387,
+                "username": "songprocessor_bot",
+                "first_name": "songprocessor",
+                "config_path": str(KNOWN_CONFIG_PATHS[0]),
+                "created_at": datetime.utcnow().isoformat() + "Z",
+                "notes": "Primary Hermes music & publishing bot"
+            }
+            changed = True
+
+        return changed
+
+    def _load(self) -> Dict[str, Any]:
+        """
+        Loads vault from disk with multi-tier fallback recovery.
+        Never throws and never silently wipes valuable keys on restart.
+        """
+        data = None
+
+        if self.vault_path.exists():
+            data = _read_json_file(self.vault_path)
+            if data is None and self.vault_path.stat().st_size > 0:
+                # Primary file exists but is corrupted (e.g. from sudden crash)
+                ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                corrupt_backup = BACKUP_DIR / f"corrupt_vault_{ts}.json"
+                try:
+                    shutil.copy2(self.vault_path, corrupt_backup)
+                    logger.error(f"Primary vault file corrupted. Preserved corrupt copy to {corrupt_backup}")
+                except Exception:
+                    pass
+
+        # If primary vault failed or is missing, recover from backup stores
+        if not data or not _has_valuable_keys(data):
+            backup_candidate = self._find_newest_valid_backup()
+            if backup_candidate:
+                logger.info("Restoring active vault state from newest secure backup...")
+                data = backup_candidate
+
+        # If still no data, initialize default structure
+        if not data:
+            data = self._default_data()
+
+        # Run intelligent auto-recall across all sources
+        recalled = self._auto_recall_missing_fields(data)
+
+        # If recovered, missing on disk, or changed, save back to disk and mirrors immediately
+        if recalled or not self.vault_path.exists():
+            self.data = data
+            self._save(force=True, create_snapshot=True)
+
+        return data
+
+    def _rotate_snapshots(self, max_snapshots: int = 20) -> None:
+        """Keeps the newest max_snapshots files in .vault_backups/ and removes older ones."""
+        try:
+            if not BACKUP_DIR.exists():
+                return
+            snaps = sorted(BACKUP_DIR.glob("vault_*.json"), key=lambda p: p.stat().st_mtime)
+            while len(snaps) > max_snapshots:
+                oldest = snaps.pop(0)
+                try:
+                    oldest.unlink()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _save(self, data: Optional[Dict[str, Any]] = None, force: bool = False, create_snapshot: bool = True) -> None:
+        """
+        Atomically saves vault data to primary file and synchronously mirrors
+        to secondary backup and user-profile disaster recovery mirrors.
+        """
         if data is not None:
             self.data = data
-        self.vault_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.vault_path.with_suffix(".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, indent=2)
-        shutil.move(str(tmp), str(self.vault_path))
+
+        # Safety Guard: Never overwrite non-empty keys with empty keys unless force=True
+        if not force and not _has_valuable_keys(self.data):
+            disk_data = _read_json_file(self.vault_path) or self._find_newest_valid_backup()
+            if disk_data and _has_valuable_keys(disk_data):
+                logger.warning("Safety guard triggered: Refusing to overwrite valuable keys with empty data. Merging...")
+                self._auto_recall_missing_fields(self.data)
+
+        # 1. Atomic write to primary vault file
+        _atomic_write_json(self.vault_path, self.data)
+
+        # 2. Synchronous mirror to secondary backup file
+        _atomic_write_json(self.backup_path, self.data)
+
+        # 3. Synchronous mirror to user profile disaster recovery mirrors (main vault only)
+        if self.vault_path == VAULT_FILE:
+            for up in (USER_PROFILE_BACKUP, HOME_VENICE_BACKUP):
+                _atomic_write_json(up, self.data)
+
+            # 4. Rolling versioned snapshot
+            if create_snapshot and _has_valuable_keys(self.data):
+                ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                snap_path = BACKUP_DIR / f"vault_{ts}.json"
+                _atomic_write_json(snap_path, self.data)
+                self._rotate_snapshots(max_snapshots=20)
+
+    # --- Backup & Recovery Public APIs ---
+
+    def create_backup(self, label: str = "") -> Dict[str, Any]:
+        """
+        Explicitly creates a timestamped, labeled backup snapshot across all stores.
+        """
+        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        clean_label = f"_{label.strip()}" if label else ""
+        snap_path = BACKUP_DIR / f"vault_{ts}{clean_label}.json"
+
+        ok = _atomic_write_json(snap_path, self.data)
+        _atomic_write_json(BACKUP_VAULT_FILE, self.data)
+        for up in (USER_PROFILE_BACKUP, HOME_VENICE_BACKUP):
+            _atomic_write_json(up, self.data)
+
+        return {
+            "success": ok,
+            "path": str(snap_path),
+            "timestamp": ts,
+            "size_bytes": snap_path.stat().st_size if snap_path.exists() else 0,
+            "has_admin_key": bool(self.get_venice_admin_key()),
+            "has_inference_key": bool(self.get_venice_inference_key()),
+            "keys_count": len(self.get_venice_keys()),
+            "subkeys_count": len(self.get_subkeys())
+        }
+
+    def list_backups(self) -> List[Dict[str, Any]]:
+        """Lists all available backup snapshots with metadata, sorted newest first."""
+        items = []
+        seen_paths = set()
+
+        def add_item(p: Path, kind: str):
+            if not p.exists() or p in seen_paths:
+                return
+            seen_paths.add(p)
+            d = _read_json_file(p)
+            v = d.get("venice", {}) if d else {}
+            items.append({
+                "filename": p.name,
+                "path": str(p),
+                "type": kind,
+                "modified_at": datetime.fromtimestamp(p.stat().st_mtime).isoformat() + "Z",
+                "size_bytes": p.stat().st_size,
+                "has_admin_key": bool(v.get("admin_key")),
+                "has_inference_key": bool(v.get("inference_key")),
+                "keys_count": len(v.get("keys", [])),
+                "subkeys_count": len(d.get("subkeys", [])) if d else 0
+            })
+
+        add_item(BACKUP_VAULT_FILE, "mirror_local")
+        add_item(USER_PROFILE_BACKUP, "mirror_user_profile")
+        add_item(HOME_VENICE_BACKUP, "mirror_home")
+
+        if BACKUP_DIR.exists():
+            for sp in sorted(BACKUP_DIR.glob("vault_*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
+                add_item(sp, "snapshot")
+
+        items.sort(key=lambda x: x["modified_at"], reverse=True)
+        return items
+
+    def restore_from_file(self, backup_path: Path) -> Dict[str, Any]:
+        """
+        Restores the active vault from a specific backup JSON file.
+        Takes a precautionary pre-restore backup first.
+        """
+        p = Path(backup_path)
+        if not p.exists():
+            return {"success": False, "error": f"Backup file not found: {p}"}
+
+        restored_data = _read_json_file(p)
+        if not restored_data or not isinstance(restored_data, dict):
+            return {"success": False, "error": f"Invalid backup file format: {p}"}
+
+        # Precautionary backup of current state
+        self.create_backup(label="pre_restore")
+
+        self.data = restored_data
+        self._auto_recall_missing_fields(self.data)
+        self._save(force=True, create_snapshot=True)
+
+        return {
+            "success": True,
+            "restored_from": str(p),
+            "keys_count": len(self.get_venice_keys()),
+            "subkeys_count": len(self.get_subkeys()),
+            "has_admin_key": bool(self.get_venice_admin_key()),
+            "has_inference_key": bool(self.get_venice_inference_key())
+        }
+
+    def auto_recall(self, sync_venice_remote: bool = True) -> Dict[str, Any]:
+        """
+        Executes a deep auto-recall scan across backup mirrors, agent configs,
+        .env files, and environment variables. If admin_key is configured and
+        sync_venice_remote=True, queries Venice API to sync all issued keys.
+        """
+        prev_admin = bool(self.get_venice_admin_key())
+        prev_inf = bool(self.get_venice_inference_key())
+        prev_keys = len(self.get_venice_keys())
+
+        recalled = self._auto_recall_missing_fields(self.data)
+
+        remote_synced_count = 0
+        admin_key = self.get_venice_admin_key()
+        if admin_key and sync_venice_remote:
+            try:
+                from core.venice_client import VeniceClient
+                client = VeniceClient(
+                    admin_key=admin_key,
+                    base_url=self.data.get("venice", {}).get("base_url", "")
+                )
+                res = client.list_keys(admin_key=admin_key)
+                if res.get("success") and "keys" in res:
+                    remote_keys = res["keys"]
+                    existing_keys = self.get_venice_keys()
+                    merged_dict = {k.get("id"): k for k in existing_keys}
+                    for rk in remote_keys:
+                        rk_id = rk.get("id")
+                        if rk_id:
+                            merged_dict[rk_id] = {**merged_dict.get(rk_id, {}), **rk}
+                    self.data.setdefault("venice", {})["keys"] = list(merged_dict.values())
+                    remote_synced_count = len(remote_keys)
+                    recalled = True
+                    logger.info(f"Synchronized {remote_synced_count} keys from Venice API")
+            except Exception as e:
+                logger.warning(f"Remote Venice key sync during recall failed: {e}")
+
+        if recalled:
+            self._save(force=True, create_snapshot=True)
+
+        return {
+            "success": True,
+            "recovered_admin_key": (not prev_admin) and bool(self.get_venice_admin_key()),
+            "recovered_inference_key": (not prev_inf) and bool(self.get_venice_inference_key()),
+            "remote_keys_synced": remote_synced_count,
+            "total_venice_keys": len(self.get_venice_keys()),
+            "total_subkeys": len(self.get_subkeys()),
+            "has_admin_key": bool(self.get_venice_admin_key()),
+            "has_inference_key": bool(self.get_venice_inference_key())
+        }
+
+    def get_backup_status(self) -> Dict[str, Any]:
+        """Returns the health and status of primary vault and all backup mirrors."""
+        snaps = self.list_backups()
+        latest_mod = snaps[0]["modified_at"] if snaps else None
+        return {
+            "success": True,
+            "vault_path": str(self.vault_path),
+            "vault_exists": self.vault_path.exists(),
+            "vault_size_bytes": self.vault_path.stat().st_size if self.vault_path.exists() else 0,
+            "backup_mirror_exists": BACKUP_VAULT_FILE.exists(),
+            "user_profile_mirror_exists": USER_PROFILE_BACKUP.exists() or HOME_VENICE_BACKUP.exists(),
+            "total_snapshots": len([s for s in snaps if s["type"] == "snapshot"]),
+            "last_backup_at": latest_mod,
+            "has_admin_key": bool(self.get_venice_admin_key()),
+            "has_inference_key": bool(self.get_venice_inference_key()),
+            "keys_count": len(self.get_venice_keys()),
+            "subkeys_count": len(self.get_subkeys())
+        }
 
     # --- Venice Key Helpers ---
 
@@ -105,14 +653,20 @@ class KeyVault:
 
     def set_venice_admin_key(self, key: str) -> None:
         self.data.setdefault("venice", {})["admin_key"] = key.strip()
-        self._save()
+        self._save(force=True, create_snapshot=True)
+        # If admin key was set, attempt to auto-sync keys from Venice API
+        if key.strip():
+            try:
+                self.auto_recall(sync_venice_remote=True)
+            except Exception:
+                pass
 
     def get_venice_inference_key(self) -> str:
         return os.environ.get("VENICE_INFERENCE_KEY") or os.environ.get("VENICE_API_KEY") or self.data.get("venice", {}).get("inference_key", "")
 
     def set_venice_inference_key(self, key: str) -> None:
         self.data.setdefault("venice", {})["inference_key"] = key.strip()
-        self._save()
+        self._save(force=True, create_snapshot=True)
 
     def get_active_venice_key(self) -> str:
         """Returns the admin key if set, otherwise the inference key."""
@@ -132,14 +686,14 @@ class KeyVault:
                 break
         if not updated:
             keys.insert(0, key_info)
-        self._save()
+        self._save(force=True, create_snapshot=True)
 
     def remove_venice_key(self, key_id: str) -> bool:
         keys = self.data.setdefault("venice", {}).setdefault("keys", [])
         initial_len = len(keys)
         self.data["venice"]["keys"] = [k for k in keys if k.get("id") != key_id]
         if len(self.data["venice"]["keys"]) < initial_len:
-            self._save()
+            self._save(force=True, create_snapshot=True)
             return True
         return False
 
@@ -162,13 +716,13 @@ class KeyVault:
         bot_data["agent_name"] = agent_name
         bot_data.setdefault("updated_at", datetime.utcnow().isoformat() + "Z")
         bots[agent_name] = bot_data
-        self._save()
+        self._save(force=True, create_snapshot=True)
 
     def remove_agent_bot(self, agent_name: str) -> bool:
         bots = self.data.setdefault("telegram", {}).setdefault("agent_bots", {})
         if agent_name in bots:
             del bots[agent_name]
-            self._save()
+            self._save(force=True, create_snapshot=True)
             return True
         return False
 
@@ -181,7 +735,7 @@ class KeyVault:
         mt["api_hash"] = str(api_hash)
         if phone:
             mt["phone"] = phone
-        self._save()
+        self._save(create_snapshot=True)
 
     # --- Deployments ---
 
@@ -194,7 +748,7 @@ class KeyVault:
             "venice_key_field": venice_field,
             "tg_token_field": tg_field
         }
-        self._save()
+        self._save(create_snapshot=True)
 
     # --- Security & Secure Pairing Code ---
 
@@ -210,14 +764,14 @@ class KeyVault:
             code = f"VK-{secrets.token_hex(4).upper()}"
             sec["pairing_code"] = code
             sec.setdefault("require_pairing", True)
-            self._save()
+            self._save(create_snapshot=True)
         return code
 
     def set_pairing_code(self, code: str) -> None:
         sec = self.data.setdefault("security", {})
         sec["pairing_code"] = code.strip()
         sec.setdefault("require_pairing", True)
-        self._save()
+        self._save(create_snapshot=True)
 
     def verify_pairing_code(self, candidate: str) -> bool:
         """Verifies candidate pairing code using constant-time comparison."""
@@ -234,7 +788,7 @@ class KeyVault:
 
     def get_cloudflare_config(self) -> Dict[str, Any]:
         return self.data.get("cloudflare", {
-            "domain": os.environ.get("CLOUDFLARE_DOMAIN", ""),
+            "domain": os.environ.get("CLOUDFLARE_DOMAIN", "venice.vmu.cash"),
             "tunnel_name": os.environ.get("CLOUDFLARE_TUNNEL_NAME", "venice-tunnel"),
             "tunnel_token": os.environ.get("CLOUDFLARE_TUNNEL_TOKEN", "")
         })
@@ -247,7 +801,7 @@ class KeyVault:
             cf["tunnel_name"] = tunnel_name.strip()
         if tunnel_token:
             cf["tunnel_token"] = tunnel_token.strip()
-        self._save()
+        self._save(create_snapshot=True)
 
     # --- Delegated Sub-Keys ---
 
@@ -265,14 +819,13 @@ class KeyVault:
                 break
         if not updated:
             subkeys.insert(0, subkey_info)
-        self._save()
+        self._save(force=True, create_snapshot=True)
 
     def remove_subkey(self, subkey_id: str) -> bool:
         subkeys = self.data.setdefault("subkeys", [])
         initial_len = len(subkeys)
         self.data["subkeys"] = [s for s in subkeys if s.get("id") != subkey_id]
         if len(self.data["subkeys"]) < initial_len:
-            self._save()
+            self._save(force=True, create_snapshot=True)
             return True
         return False
-

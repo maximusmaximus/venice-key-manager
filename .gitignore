@@ -1,5 +1,10 @@
 # Secrets, Vaults, and Local State
 venice_vault.json
+venice_vault.backup.json
+venice_vault.*.json
+!venice_vault.example.json
+.vault_backups/
+backups/
 *.local.json
 *.session
 .env

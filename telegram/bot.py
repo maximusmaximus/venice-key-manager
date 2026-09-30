@@ -127,6 +127,10 @@ class VeniceTelegramBot:
                     {"text": "🎟️ Agent Sub-Keys", "callback_data": "menu_subkeys"}
                 ],
                 [
+                    {"text": "💾 Backup Vault", "callback_data": "act_backup_vault"},
+                    {"text": "🔄 Recall Keys", "callback_data": "act_recall_vault"}
+                ],
+                [
                     {"text": "📊 Model Limits", "callback_data": "menu_limits"},
                     {"text": "🔄 Refresh Dashboard", "callback_data": "menu_main"}
                 ]
@@ -685,6 +689,34 @@ class VeniceTelegramBot:
                 txt = "🎟️ *Agent Sub-Keys*\n\nNo sub-keys minted yet. Mint them via Web UI or MCP server."
             self.edit_message(chat_id, msg_id, txt, reply_markup=self.back_to_main_keyboard())
 
+        elif data == "act_backup_vault":
+            self.answer_callback(cb_id, "💾 Creating backup snapshot...")
+            res = self.vault.create_backup(label="tg_bot")
+            txt = (
+                f"💾 *Vault Backup Snapshot Created*:\n\n"
+                f"• *Timestamp*: `{res.get('timestamp')}`\n"
+                f"• *File Size*: `{res.get('size_bytes')}` bytes\n"
+                f"• *Venice Keys*: `{res.get('keys_count')}`\n"
+                f"• *Agent Sub-Keys*: `{res.get('subkeys_count')}`\n"
+                f"• *Mirrors*: `Local & Profile Mirrors Synced ✅`\n\n"
+                f"Path: `{res.get('path')}`"
+            )
+            self.edit_message(chat_id, msg_id, txt, reply_markup=self.back_to_main_keyboard())
+
+        elif data == "act_recall_vault":
+            self.answer_callback(cb_id, "🔄 Running auto-recall...")
+            res = self.vault.auto_recall(sync_venice_remote=True)
+            txt = (
+                f"🔄 *Vault Auto-Recall & Recovery Complete*:\n\n"
+                f"• *Admin Key*: `{'RECOVERED ✅' if res.get('recovered_admin_key') else ('CONFIGURED ✅' if res.get('has_admin_key') else 'NOT SET ⚠️')}`\n"
+                f"• *Inference Key*: `{'RECOVERED ✅' if res.get('recovered_inference_key') else ('CONFIGURED ✅' if res.get('has_inference_key') else 'NOT SET ⚠️')}`\n"
+                f"• *Remote Keys Synced*: `{res.get('remote_keys_synced')}`\n"
+                f"• *Total Venice Keys*: `{res.get('total_venice_keys')}`\n"
+                f"• *Total Sub-Keys*: `{res.get('total_subkeys')}`\n"
+                f"• *Status*: `Vault state verified and resilient ✅`"
+            )
+            self.edit_message(chat_id, msg_id, txt, reply_markup=self.back_to_main_keyboard())
+
     # --- Message Command Handlers ---
 
     def handle_message(self, msg: Dict[str, Any]):
@@ -882,11 +914,57 @@ class VeniceTelegramBot:
                 txt = f"📥 *Git Sync {target}*: {st} {c_after}\n{r.get('message', '')}"
             self.send_message(chat_id, txt)
 
+        elif text.startswith("/backup") or text.startswith("/backup_vault"):
+            res = self.vault.create_backup(label="tg_cmd")
+            txt = (
+                "💾 *Vault Backup Snapshot Created*:\n\n"
+                f"• *Timestamp*: `{res.get('timestamp')}`\n"
+                f"• *File Size*: `{res.get('size_bytes')}` bytes\n"
+                f"• *Venice Keys*: `{res.get('keys_count')}`\n"
+                f"• *Agent Sub-Keys*: `{res.get('subkeys_count')}`\n"
+                f"• *Mirrors Synced*: `Local & AppData Backup Mirrors Active ✅`\n\n"
+                f"Path: `{res.get('path')}`"
+            )
+            self.send_message(chat_id, txt, reply_markup=self.back_to_main_keyboard())
+
+        elif text.startswith("/recall") or text.startswith("/recall_vault"):
+            self.send_message(chat_id, "🔄 *Running deep auto-recall across backup stores and configs...*")
+            res = self.vault.auto_recall(sync_venice_remote=True)
+            txt = (
+                "🔄 *Vault Auto-Recall & Recovery Complete*:\n\n"
+                f"• *Admin Key*: `{'RECOVERED ✅' if res.get('recovered_admin_key') else ('CONFIGURED ✅' if res.get('has_admin_key') else 'NOT SET ⚠️')}`\n"
+                f"• *Inference Key*: `{'RECOVERED ✅' if res.get('recovered_inference_key') else ('CONFIGURED ✅' if res.get('has_inference_key') else 'NOT SET ⚠️')}`\n"
+                f"• *Remote Keys Synced*: `{res.get('remote_keys_synced')}`\n"
+                f"• *Total Venice Keys*: `{res.get('total_venice_keys')}`\n"
+                f"• *Total Sub-Keys*: `{res.get('total_subkeys')}`\n"
+                f"• *Vault Health*: `Durable and synchronized ✅`"
+            )
+            self.send_message(chat_id, txt, reply_markup=self.back_to_main_keyboard())
+
+        elif text.startswith("/vault_status") or text.startswith("/backup_status"):
+            st = self.vault.get_backup_status()
+            txt = (
+                "🛡️ *Vault Backup & Health Status*:\n\n"
+                f"• *Primary Vault*: `{st.get('vault_size_bytes')}` bytes\n"
+                f"• *Backup Mirror*: `{'ACTIVE ✅' if st.get('backup_mirror_exists') else 'MISSING ⚠️'}`\n"
+                f"• *Profile Mirror*: `{'ACTIVE ✅' if st.get('user_profile_mirror_exists') else 'MISSING ⚠️'}`\n"
+                f"• *Snapshots Saved*: `{st.get('total_snapshots')}`\n"
+                f"• *Last Backup*: `{st.get('last_backup_at') or 'None'}`\n"
+                f"• *Admin Key*: `{'CONFIGURED ✅' if st.get('has_admin_key') else 'NOT SET ⚠️'}`\n"
+                f"• *Inference Key*: `{'CONFIGURED ✅' if st.get('has_inference_key') else 'NOT SET ⚠️'}`\n"
+                f"• *Active Venice Keys*: `{st.get('keys_count')}`\n"
+                f"• *Agent Sub-Keys*: `{st.get('subkeys_count')}`"
+            )
+            self.send_message(chat_id, txt, reply_markup=self.back_to_main_keyboard())
+
         elif text.startswith("/help"):
             txt = (
                 "⚡ *Venice & TG Engine Commands*:\n\n"
                 "• `/menu` or `/start` - Open interactive control dashboard\n"
                 "• `/provision` - Open Agent Key (XS-XL) Provisioning Wizard\n"
+                "• `/backup_vault` - Create instant snapshot and sync all backup mirrors\n"
+                "• `/recall_vault` - Deep auto-recall and recover keys from mirrors & configs\n"
+                "• `/vault_status` - Check disaster recovery and backup status\n"
                 "• `/fleet` - Check status of all paired fleet nodes (Local, mcmini)\n"
                 "• `/sync_fleet [node|all]` - Pull latest Git updates across machines\n"
                 "• `/balance` - Check live USD and DIEM balance\n"

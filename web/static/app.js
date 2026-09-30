@@ -233,6 +233,7 @@ async function refreshAll() {
       loadSubkeys(),
       loadAgentBots(),
       loadConfig(),
+      loadVaultStatus(),
       loadFleetNodes()
     ]);
   } else {
@@ -491,6 +492,118 @@ async function loadConfig() {
       }
     }
   } catch (err) {}
+}
+
+async function loadVaultStatus() {
+  const elPrimary = document.getElementById("stat-primary-vault");
+  const elMirror = document.getElementById("stat-backup-mirror");
+  const elProfile = document.getElementById("stat-profile-mirror");
+  const elLast = document.getElementById("stat-last-backup");
+  const elCount = document.getElementById("val-backup-count");
+
+  try {
+    const res = await apiFetch("/api/vault/status");
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.success) {
+      if (elPrimary) {
+        const kb = (data.vault_size_bytes / 1024).toFixed(1);
+        elPrimary.innerHTML = `<span class="badge badge-green">ACTIVE</span> <span class="text-mono" style="font-size: 11px;">(${kb} KB)</span>`;
+      }
+      if (elMirror) {
+        elMirror.innerHTML = data.backup_mirror_exists 
+          ? `<span class="badge badge-green">SYNCED ✅</span>` 
+          : `<span class="badge badge-yellow">MISSING ⚠️</span>`;
+      }
+      if (elProfile) {
+        elProfile.innerHTML = data.user_profile_mirror_exists 
+          ? `<span class="badge badge-green">SYNCED ✅</span>` 
+          : `<span class="badge badge-yellow">STANDBY ⚠️</span>`;
+      }
+      if (elLast) {
+        elLast.innerText = data.last_backup_at ? new Date(data.last_backup_at).toLocaleString() : "None";
+      }
+      if (elCount) {
+        elCount.innerText = data.total_snapshots || 0;
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to load vault backup status:", err);
+  }
+}
+
+async function loadVaultBackups() {
+  const tbody = document.getElementById("tbody-vault-backups");
+  if (!tbody) return;
+  tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">Loading snapshots...</td></tr>`;
+
+  try {
+    const res = await apiFetch("/api/vault/backups");
+    const data = await res.json();
+    if (data.success && data.backups) {
+      if (data.backups.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">No snapshots created yet.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = data.backups.map(b => {
+        const typeBadge = b.type === 'snapshot' 
+          ? `<span class="badge badge-purple">SNAPSHOT</span>`
+          : (b.type === 'mirror_local' ? `<span class="badge badge-cyan">LOCAL MIRROR</span>` : `<span class="badge badge-green">PROFILE MIRROR</span>`);
+        const sizeKb = (b.size_bytes / 1024).toFixed(1);
+        const dateStr = b.modified_at ? new Date(b.modified_at).toLocaleString() : "Unknown";
+        const adminStr = b.has_admin_key ? "Admin: Yes" : "Admin: No";
+        const infStr = b.has_inference_key ? "Inf: Yes" : "Inf: No";
+        const subkeysCount = b.subkeys_count || 0;
+
+        const safePath = JSON.stringify(b.path);
+
+        return `
+          <tr>
+            <td>
+              <div style="font-weight: 600; font-size: 13px;">${escapeHtml(b.filename)}</div>
+              <div class="text-dim text-mono" style="font-size: 10px; max-width: 250px; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(b.path)}</div>
+            </td>
+            <td>${typeBadge}</td>
+            <td class="text-mono">${sizeKb} KB</td>
+            <td>
+              <div style="font-size: 12px;"><strong>${b.keys_count}</strong> keys / <strong>${subkeysCount}</strong> subkeys</div>
+              <div class="text-dim" style="font-size: 11px;">${adminStr} | ${infStr}</div>
+            </td>
+            <td><span class="text-muted" style="font-size: 12px;">${dateStr}</span></td>
+            <td>
+              <button class="btn btn-sm btn-secondary" onclick='restoreVaultBackup(${safePath})' title="Restore vault to this snapshot">
+                🔄 Restore
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join("");
+    }
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">Error loading backups: ${err.message}</td></tr>`;
+  }
+}
+
+async function restoreVaultBackup(path) {
+  if (!confirm(`Are you sure you want to restore the vault from this backup?\nA safety snapshot of current state will be preserved before restoring.`)) return;
+  showToast("Restoring vault snapshot...", "info");
+  try {
+    const res = await apiFetch("/api/vault/restore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: path })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast("Vault restored successfully!");
+      closeModal("modal-vault-backups");
+      refreshAll();
+    } else {
+      showToast(`Restore failed: ${data.error}`, "error");
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, "error");
+  }
 }
 
 // --- Key Actions ---
@@ -834,6 +947,84 @@ function initForms() {
         e.preventDefault();
         submitBannerAdminKey();
       }
+    });
+  }
+
+  // Backup & Disaster Recovery Buttons
+  const btnCreateBackup = document.getElementById("btn-create-backup");
+  if (btnCreateBackup) {
+    btnCreateBackup.addEventListener("click", async () => {
+      btnCreateBackup.disabled = true;
+      btnCreateBackup.innerHTML = `<span>⏳</span> Backing up...`;
+      try {
+        const res = await apiFetch("/api/vault/backup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ label: "web_ui" })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`Snapshot created! (${data.size_bytes} B)`);
+          loadVaultStatus();
+        } else {
+          showToast(`Backup failed: ${data.error}`, "error");
+        }
+      } catch (err) {
+        showToast(`Error: ${err.message}`, "error");
+      } finally {
+        btnCreateBackup.disabled = false;
+        btnCreateBackup.innerHTML = `<span>💾</span> Create Instant Backup`;
+      }
+    });
+  }
+
+  const triggerAutoRecall = async (btn) => {
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = `<span>⏳</span> Recalling...`;
+    }
+    showToast("Running deep auto-recall across backup stores...", "info");
+    try {
+      const res = await apiFetch("/api/vault/recall", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sync_remote: true })
+      });
+      const data = await res.json();
+      if (data.success) {
+        const adminMsg = data.recovered_admin_key ? "Admin Key Recovered! " : "";
+        const infMsg = data.recovered_inference_key ? "Inference Key Recovered! " : "";
+        const syncMsg = data.remote_keys_synced > 0 ? `${data.remote_keys_synced} remote keys synced! ` : "";
+        showToast(`Auto-recall complete! ${adminMsg}${infMsg}${syncMsg}Keys verified.`);
+        refreshAll();
+      } else {
+        showToast(`Recall failed: ${data.error}`, "error");
+      }
+    } catch (err) {
+      showToast(`Error: ${err.message}`, "error");
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = `<span>🔄</span> Auto-Recall & Recover Keys`;
+      }
+    }
+  };
+
+  const btnAutoRecall = document.getElementById("btn-auto-recall-vault");
+  if (btnAutoRecall) {
+    btnAutoRecall.addEventListener("click", () => triggerAutoRecall(btnAutoRecall));
+  }
+
+  const btnModalRecall = document.getElementById("btn-modal-auto-recall");
+  if (btnModalRecall) {
+    btnModalRecall.addEventListener("click", () => triggerAutoRecall(btnModalRecall));
+  }
+
+  const btnViewBackups = document.getElementById("btn-view-backups");
+  if (btnViewBackups) {
+    btnViewBackups.addEventListener("click", () => {
+      openModal("modal-vault-backups");
+      loadVaultBackups();
     });
   }
 }

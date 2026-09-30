@@ -26,16 +26,23 @@ class TestPairingAndSubkeys(unittest.TestCase):
     def setUp(self):
         # Create a test vault with isolated temp json
         self.test_vault_path = PROJECT_ROOT / "tests" / "test_temp_vault.json"
+        for p in (self.test_vault_path, self.test_vault_path.with_suffix(".backup.json")):
+            if p.exists():
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
         self.vault = KeyVault(vault_path=self.test_vault_path)
         self.vault.set_pairing_code("TEST-PAIR-9999")
         self.vault.set_venice_inference_key("test_inf_key_abc123")
 
     def tearDown(self):
-        if self.test_vault_path.exists():
-            try:
-                os.remove(self.test_vault_path)
-            except Exception:
-                pass
+        for p in (self.test_vault_path, self.test_vault_path.with_suffix(".backup.json")):
+            if p.exists():
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
 
     def test_vault_pairing_and_subkeys(self):
         """Verify vault pairing verification and subkey storage."""
