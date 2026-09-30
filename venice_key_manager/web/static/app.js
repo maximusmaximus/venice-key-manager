@@ -181,6 +181,7 @@ function initDashboardUI() {
     initBackup();
     initSettings();
     initReport();
+    initAllocations();
 
     // Refresh button
     const btnRefresh = document.getElementById("btn-refresh");
@@ -189,6 +190,9 @@ function initDashboardUI() {
         loadBalance();
         loadKeys();
         loadModels();
+        loadProjects();
+        loadExternalKeys();
+        loadGatewayInfo();
         showToast("Data refreshed from Venice cloud", "info");
       });
     }
@@ -218,6 +222,9 @@ function initDashboardUI() {
   loadCategories();
   loadKeys();
   loadModels();
+  loadProjects();
+  loadExternalKeys();
+  loadGatewayInfo();
   initSSE();
 }
 
@@ -1415,4 +1422,526 @@ function initReport() {
     });
   }
 }
+
+// =============================================================================
+// EXTERNAL ALLOCATIONS, PROJECTS, & GATEWAY
+// =============================================================================
+let allProjects = [];
+let allExternalKeys = [];
+let currentGatewayInfo = null;
+
+function initAllocations() {
+  // Cloudflare Gateway URL Save
+  const btnSaveCf = document.getElementById("btn-save-cf-url");
+  if (btnSaveCf) {
+    btnSaveCf.addEventListener("click", saveGatewayUrl);
+  }
+
+  // Snippet Copy Buttons
+  const btnCopyCurl = document.getElementById("btn-copy-gw-curl");
+  if (btnCopyCurl) {
+    btnCopyCurl.addEventListener("click", () => {
+      const code = document.getElementById("gw-snippet-pre")?.innerText;
+      if (code) {
+        navigator.clipboard.writeText(code);
+        showToast("cURL example copied to clipboard!", "success");
+      }
+    });
+  }
+
+  const btnCopyPy = document.getElementById("btn-copy-gw-py");
+  if (btnCopyPy) {
+    btnCopyPy.addEventListener("click", () => {
+      const gwUrl = currentGatewayInfo?.effective_gateway_url || "http://localhost:8660";
+      const pySnippet = `from openai import OpenAI\n\nclient = OpenAI(\n    base_url="${gwUrl}/v1",\n    api_key="<EXTERNAL_KEY_OR_PAIRING_CODE>"\n)\n\nresponse = client.chat.completions.create(\n    model="xs",  # or "s", "m", "l", "xl"\n    messages=[{"role": "user", "content": "Hello Venice!"}]\n)\nprint(response.choices[0].message.content)`;
+      navigator.clipboard.writeText(pySnippet);
+      showToast("Python OpenAI snippet copied to clipboard!", "success");
+    });
+  }
+
+  // Project Modals
+  const btnOpenCreateProj = document.getElementById("btn-open-create-project");
+  if (btnOpenCreateProj) {
+    btnOpenCreateProj.addEventListener("click", () => {
+      document.getElementById("proj-create-name").value = "";
+      document.getElementById("proj-create-desc").value = "";
+      document.getElementById("proj-create-daily").value = "2.00";
+      document.getElementById("proj-create-weekly").value = "";
+      document.getElementById("proj-create-default-sub").value = "0.25";
+      document.getElementById("proj-create-tier").value = "xl";
+      document.getElementById("modal-create-project").classList.remove("hidden");
+    });
+  }
+
+  const btnSubmitCreateProj = document.getElementById("btn-submit-create-project");
+  if (btnSubmitCreateProj) {
+    btnSubmitCreateProj.addEventListener("click", handleCreateProject);
+  }
+
+  const btnSubmitEditProj = document.getElementById("btn-submit-edit-project");
+  if (btnSubmitEditProj) {
+    btnSubmitEditProj.addEventListener("click", handleEditProject);
+  }
+
+  // External Key Modals
+  const btnOpenCreateExt = document.getElementById("btn-open-create-ext-key");
+  if (btnOpenCreateExt) {
+    btnOpenCreateExt.addEventListener("click", () => {
+      document.getElementById("ext-key-name").value = "";
+      document.getElementById("ext-key-daily-limit").value = "0.25";
+      document.getElementById("ext-key-notes").value = "";
+      document.getElementById("ext-key-prefix").value = "vkm_ext_";
+      document.getElementById("modal-create-ext-key").classList.remove("hidden");
+    });
+  }
+
+  const btnSubmitCreateExt = document.getElementById("btn-submit-create-ext-key");
+  if (btnSubmitCreateExt) {
+    btnSubmitCreateExt.addEventListener("click", handleCreateExternalKey);
+  }
+
+  const btnSubmitSubKey = document.getElementById("btn-submit-create-sub-key");
+  if (btnSubmitSubKey) {
+    btnSubmitSubKey.addEventListener("click", handleCreateSubKey);
+  }
+
+  const btnSubmitEditExt = document.getElementById("btn-submit-edit-ext-key");
+  if (btnSubmitEditExt) {
+    btnSubmitEditExt.addEventListener("click", handleEditExternalKey);
+  }
+
+  // Filter dropdown
+  const filterProj = document.getElementById("filter-ext-project");
+  if (filterProj) {
+    filterProj.addEventListener("change", () => {
+      loadExternalKeys(filterProj.value);
+    });
+  }
+}
+
+async function loadGatewayInfo() {
+  try {
+    const res = await authFetch("/api/gateway/info");
+    if (!res.ok) return;
+    currentGatewayInfo = await res.json();
+    const inputCf = document.getElementById("cfg-cf-gateway-url");
+    if (inputCf && currentGatewayInfo.cloudflare_gateway_url) {
+      inputCf.value = currentGatewayInfo.cloudflare_gateway_url;
+    }
+    const pre = document.getElementById("gw-snippet-pre");
+    if (pre && currentGatewayInfo.effective_gateway_url) {
+      pre.innerText = `curl -X POST ${currentGatewayInfo.effective_gateway_url}/v1/chat/completions \\\n  -H "Authorization: Bearer <EXTERNAL_KEY_OR_PAIRING_CODE>" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "xs", "messages": [{"role": "user", "content": "Hello!"}]}'`;
+    }
+  } catch (err) {}
+}
+
+async function saveGatewayUrl() {
+  const inputCf = document.getElementById("cfg-cf-gateway-url");
+  const url = inputCf ? inputCf.value.trim() : "";
+  try {
+    const res = await authFetch("/api/gateway/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cloudflare_gateway_url: url })
+    });
+    if (!res.ok) throw new Error("Failed to save gateway config");
+    showToast("Cloudflare Gateway endpoint updated successfully!", "success");
+    loadGatewayInfo();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+async function loadProjects() {
+  const tbody = document.getElementById("projects-tbody");
+  try {
+    const res = await authFetch("/api/projects");
+    if (!res.ok) throw new Error("Failed to load projects");
+    const data = await res.json();
+    allProjects = data.projects || [];
+
+    const tabBadge = document.getElementById("tab-projects-count");
+    if (tabBadge) tabBadge.innerText = allProjects.length;
+
+    // Update project select dropdowns
+    const selCreate = document.getElementById("ext-key-project-select");
+    const selFilter = document.getElementById("filter-ext-project");
+    if (selCreate) {
+      selCreate.innerHTML = allProjects.map(p =>
+        `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} ($${p.daily_limit_usd.toFixed(2)}/day cap)</option>`
+      ).join("");
+    }
+    if (selFilter) {
+      const cur = selFilter.value;
+      selFilter.innerHTML = `<option value="">All Projects (${allProjects.length})</option>` +
+        allProjects.map(p => `<option value="${escapeHtml(p.id)}" ${p.id === cur ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join("");
+    }
+
+    if (!allProjects.length) {
+      if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="text-center py-6 text-muted">No projects found. Create your first project allocation!</td></tr>`;
+      return;
+    }
+
+    if (tbody) {
+      tbody.innerHTML = allProjects.map(p => {
+        const isPaused = p.status !== "active";
+        const weeklyStr = p.weekly_limit_usd ? `$${p.weekly_limit_usd.toFixed(2)}` : "--";
+        const defaultSubStr = `$${(p.default_sub_key_daily_usd || 0.25).toFixed(2)}`;
+        const daySpent = (p.current_day_spend || 0).toFixed(4);
+        const dayLimit = p.daily_limit_usd.toFixed(2);
+        const percent = Math.min(100, Math.round(((p.current_day_spend || 0) / p.daily_limit_usd) * 100));
+
+        return `
+          <tr class="${isPaused ? 'row-paused' : ''}">
+            <td>
+              <div class="font-semibold text-white">${escapeHtml(p.name)}</div>
+              <div class="text-xs text-dim">${escapeHtml(p.description || p.id)}</div>
+            </td>
+            <td><span class="mono font-bold">$${dayLimit}</span></td>
+            <td><span class="mono text-dim">${weeklyStr}</span></td>
+            <td><span class="mono text-accent">${defaultSubStr} / day</span></td>
+            <td><span class="chip chip-category font-bold">${p.max_model_tier.toUpperCase()}</span></td>
+            <td>
+              <div class="spend-bar-cell">
+                <span class="mono text-xs">$${daySpent} (${percent}%)</span>
+                <div class="progress-bar-bg"><div class="progress-bar-fill" style="width: ${percent}%;"></div></div>
+              </div>
+            </td>
+            <td><span class="chip chip-type">${p.connected_keys_count || 0} active</span></td>
+            <td><span class="chip ${isPaused ? 'chip-warning' : 'chip-success'}">${p.status}</span></td>
+            <td>
+              <div style="display:flex; gap:6px;">
+                <button class="btn btn-xs btn-outline" onclick="openEditProjectModal('${p.id}')">✏️ Edit</button>
+                <button class="btn btn-xs btn-primary" onclick="openCreateExtKeyForProject('${p.id}')">➕ Key</button>
+                ${p.id !== 'proj_default' ? `<button class="btn btn-xs btn-danger" onclick="deleteProject('${p.id}')">❌</button>` : ''}
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join("");
+    }
+  } catch (err) {
+    if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="text-center text-warning py-6">Error loading projects: ${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+async function loadExternalKeys(projectId = "") {
+  const tbody = document.getElementById("ext-keys-tbody");
+  try {
+    const url = projectId ? `/api/external-keys?project_id=${encodeURIComponent(projectId)}` : "/api/external-keys";
+    const res = await authFetch(url);
+    if (!res.ok) throw new Error("Failed to load external keys");
+    const data = await res.json();
+    allExternalKeys = data.keys || [];
+
+    if (!allExternalKeys.length) {
+      if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="text-center py-6 text-muted">No external keys found. Click 'Generate External Key' to grant inference allocation!</td></tr>`;
+      return;
+    }
+
+    if (tbody) {
+      tbody.innerHTML = allExternalKeys.map(k => {
+        const isPaused = k.status !== "active";
+        const tokenDisplay = k.token ? `...${k.token.slice(-6)}` : k.id;
+        const spentVal = (k.current_period_spend || 0).toFixed(4);
+        const limitVal = (k.daily_limit_usd || 0.25).toFixed(2);
+        const periodLabel = k.limit_period || "DAY";
+
+        return `
+          <tr class="${isPaused ? 'row-paused' : ''}">
+            <td>
+              <div class="font-semibold text-white">${escapeHtml(k.name)}</div>
+              <div class="text-xs text-dim">${escapeHtml(k.notes || k.id)}</div>
+            </td>
+            <td><span class="chip chip-category text-xs">${escapeHtml(k.project_name || k.project_id)}</span></td>
+            <td><span class="chip chip-type text-xs">${k.key_type || 'EXTERNAL'}</span></td>
+            <td>
+              <div class="key-id-cell">
+                <span class="mono text-xs">${escapeHtml(tokenDisplay)}</span>
+                <button class="btn btn-xs btn-outline copy-btn" data-copy-text="${escapeHtml(k.token || k.id)}" title="Copy Full Token">📋 Copy</button>
+              </div>
+            </td>
+            <td><span class="mono font-bold">$${limitVal}</span> <span class="text-xs text-dim">/ ${periodLabel}</span></td>
+            <td><span class="mono text-accent">$${spentVal}</span></td>
+            <td><span class="chip font-bold">${(k.max_model_tier || 'xl').toUpperCase()}</span></td>
+            <td><span class="chip ${isPaused ? 'chip-danger' : 'chip-success'}">${k.status}</span></td>
+            <td>
+              <div style="display:flex; gap:6px;">
+                <button class="btn btn-xs btn-outline" onclick="copyExtKeyCurl('${k.token}', '${k.max_model_tier}')" title="Copy cURL snippet">📋 cURL</button>
+                <button class="btn btn-xs btn-outline" onclick="openEditExtKeyModal('${k.id}')" title="Modify Allocation">✏️ Edit</button>
+                <button class="btn btn-xs btn-secondary" onclick="openCreateSubKeyModal('${k.id}', '${escapeHtml(k.name)}')" title="Delegate Sub-Key">🌱 Sub-Key</button>
+                <button class="btn btn-xs btn-danger" onclick="revokeExternalKey('${k.id}')" title="Revoke Key">❌</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join("");
+    }
+  } catch (err) {
+    if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="text-center text-warning py-6">Error loading keys: ${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+// Project Modal Handlers
+async function handleCreateProject() {
+  const name = document.getElementById("proj-create-name").value.trim();
+  if (!name) return showToast("Project name is required", "error");
+
+  const desc = document.getElementById("proj-create-desc").value.trim();
+  const daily = parseFloat(document.getElementById("proj-create-daily").value) || 1.00;
+  const weeklyInput = document.getElementById("proj-create-weekly").value;
+  const weekly = weeklyInput ? parseFloat(weeklyInput) : null;
+  const defaultSub = parseFloat(document.getElementById("proj-create-default-sub").value) || 0.25;
+  const tier = document.getElementById("proj-create-tier").value;
+
+  try {
+    const res = await authFetch("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        description: desc,
+        daily_limit_usd: daily,
+        weekly_limit_usd: weekly,
+        default_sub_key_daily_usd: defaultSub,
+        max_model_tier: tier,
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Failed to create project");
+    }
+    document.getElementById("modal-create-project").classList.add("hidden");
+    showToast(`Project '${name}' created successfully!`, "success");
+    loadProjects();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+function openEditProjectModal(projectId) {
+  const p = allProjects.find(item => item.id === projectId);
+  if (!p) return;
+  document.getElementById("proj-edit-id").value = p.id;
+  document.getElementById("proj-edit-name").value = p.name;
+  document.getElementById("proj-edit-daily").value = p.daily_limit_usd;
+  document.getElementById("proj-edit-default-sub").value = p.default_sub_key_daily_usd || 0.25;
+  document.getElementById("proj-edit-tier").value = p.max_model_tier || "xl";
+  document.getElementById("proj-edit-status").value = p.status || "active";
+  document.getElementById("modal-edit-project").classList.remove("hidden");
+}
+
+async function handleEditProject() {
+  const pid = document.getElementById("proj-edit-id").value;
+  const name = document.getElementById("proj-edit-name").value.trim();
+  const daily = parseFloat(document.getElementById("proj-edit-daily").value);
+  const defaultSub = parseFloat(document.getElementById("proj-edit-default-sub").value);
+  const tier = document.getElementById("proj-edit-tier").value;
+  const status = document.getElementById("proj-edit-status").value;
+
+  try {
+    const res = await authFetch(`/api/projects/${pid}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        daily_limit_usd: daily,
+        default_sub_key_daily_usd: defaultSub,
+        max_model_tier: tier,
+        status,
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Failed to update project");
+    }
+    document.getElementById("modal-edit-project").classList.add("hidden");
+    showToast("Project allocation updated successfully!", "success");
+    loadProjects();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+async function deleteProject(projectId) {
+  if (!confirm(`Delete project and revoke all associated external keys?`)) return;
+  try {
+    const res = await authFetch(`/api/projects/${projectId}`, { method: "DELETE" });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Failed to delete project");
+    }
+    showToast("Project deleted.", "info");
+    loadProjects();
+    loadExternalKeys();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+// External Key Handlers
+function openCreateExtKeyForProject(projectId) {
+  const sel = document.getElementById("ext-key-project-select");
+  if (sel) sel.value = projectId;
+  document.getElementById("ext-key-name").value = "";
+  document.getElementById("ext-key-daily-limit").value = "0.25";
+  document.getElementById("ext-key-notes").value = "";
+  document.getElementById("modal-create-ext-key").classList.remove("hidden");
+}
+
+async function handleCreateExternalKey() {
+  const projectId = document.getElementById("ext-key-project-select").value;
+  const name = document.getElementById("ext-key-name").value.trim();
+  if (!name) return showToast("Key/Agent name is required", "error");
+
+  const daily = parseFloat(document.getElementById("ext-key-daily-limit").value) || 0.25;
+  const period = document.getElementById("ext-key-period").value;
+  const tier = document.getElementById("ext-key-tier").value;
+  const prefix = document.getElementById("ext-key-prefix").value.trim() || "vkm_ext_";
+  const notes = document.getElementById("ext-key-notes").value.trim();
+
+  try {
+    const res = await authFetch("/api/external-keys", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project_id: projectId,
+        name,
+        daily_limit_usd: daily,
+        limit_period: period,
+        max_model_tier: tier,
+        prefix,
+        notes,
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Failed to generate key");
+    }
+    const data = await res.json();
+    document.getElementById("modal-create-ext-key").classList.add("hidden");
+    revealExternalKey(data.key);
+    loadExternalKeys();
+    loadProjects();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+function openCreateSubKeyModal(parentKeyId, parentName) {
+  document.getElementById("sub-key-parent-id").value = parentKeyId;
+  document.getElementById("sub-key-parent-label").innerText = `${parentName} (${parentKeyId})`;
+  document.getElementById("sub-key-name").value = "";
+  document.getElementById("sub-key-amount").value = "0.25";
+  document.getElementById("sub-key-notes").value = "";
+  document.getElementById("modal-create-sub-key").classList.remove("hidden");
+}
+
+async function handleCreateSubKey() {
+  const parentId = document.getElementById("sub-key-parent-id").value;
+  const name = document.getElementById("sub-key-name").value.trim();
+  if (!name) return showToast("Sub-key name is required", "error");
+
+  const amount = parseFloat(document.getElementById("sub-key-amount").value) || 0.25;
+  const period = document.getElementById("sub-key-period").value;
+  const tier = document.getElementById("sub-key-tier").value;
+  const notes = document.getElementById("sub-key-notes").value.trim();
+
+  try {
+    const res = await authFetch(`/api/external-keys/${parentId}/subkeys`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        amount_usd: amount,
+        period,
+        max_model_tier: tier,
+        notes,
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Failed to generate sub-key");
+    }
+    const data = await res.json();
+    document.getElementById("modal-create-sub-key").classList.add("hidden");
+    revealExternalKey(data.key);
+    loadExternalKeys();
+    loadProjects();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+function openEditExtKeyModal(keyId) {
+  const k = allExternalKeys.find(item => item.id === keyId);
+  if (!k) return;
+  document.getElementById("ext-edit-key-id").value = k.id;
+  document.getElementById("ext-edit-name").value = k.name;
+  document.getElementById("ext-edit-daily-limit").value = k.daily_limit_usd;
+  document.getElementById("ext-edit-tier").value = k.max_model_tier || "xl";
+  document.getElementById("ext-edit-status").value = k.status || "active";
+  document.getElementById("modal-edit-ext-key").classList.remove("hidden");
+}
+
+async function handleEditExternalKey() {
+  const kid = document.getElementById("ext-edit-key-id").value;
+  const name = document.getElementById("ext-edit-name").value.trim();
+  const daily = parseFloat(document.getElementById("ext-edit-daily-limit").value);
+  const tier = document.getElementById("ext-edit-tier").value;
+  const status = document.getElementById("ext-edit-status").value;
+
+  try {
+    const res = await authFetch(`/api/external-keys/${kid}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        daily_limit_usd: daily,
+        max_model_tier: tier,
+        status,
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Failed to update external key");
+    }
+    document.getElementById("modal-edit-ext-key").classList.add("hidden");
+    showToast("Allocation updated!", "success");
+    loadExternalKeys();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+async function revokeExternalKey(keyId) {
+  if (!confirm(`Revoke external key? Gated inference access will be immediately blocked.`)) return;
+  try {
+    const res = await authFetch(`/api/external-keys/${keyId}`, { method: "DELETE" });
+    if (!res.ok) throw new Error("Revocation failed");
+    showToast("External key revoked", "success");
+    loadExternalKeys();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+function revealExternalKey(keyObj) {
+  document.getElementById("revealed-ext-key-token").value = keyObj.token;
+  const gwUrl = currentGatewayInfo?.effective_gateway_url || "http://localhost:8660";
+  const curlCmd = `curl -X POST ${gwUrl}/v1/chat/completions \\\n  -H "Authorization: Bearer ${keyObj.token}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "${keyObj.max_model_tier}", "messages": [{"role": "user", "content": "Hello!"}]}'`;
+  document.getElementById("revealed-ext-key-curl").innerText = curlCmd;
+
+  const pyCode = `from openai import OpenAI\n\nclient = OpenAI(\n    base_url="${gwUrl}/v1",\n    api_key="${keyObj.token}"\n)\n\nres = client.chat.completions.create(\n    model="${keyObj.max_model_tier}",\n    messages=[{"role": "user", "content": "Hello!"}]\n)\nprint(res.choices[0].message.content)`;
+  document.getElementById("revealed-ext-key-py").innerText = pyCode;
+  document.getElementById("modal-ext-key-revealed").classList.remove("hidden");
+}
+
+function copyExtKeyCurl(token, tier) {
+  const gwUrl = currentGatewayInfo?.effective_gateway_url || "http://localhost:8660";
+  const curlCmd = `curl -X POST ${gwUrl}/v1/chat/completions \\\n  -H "Authorization: Bearer ${token}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "${tier}", "messages": [{"role": "user", "content": "Hello!"}]}'`;
+  navigator.clipboard.writeText(curlCmd);
+  showToast("cURL command copied to clipboard!", "success");
+}
+
 

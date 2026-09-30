@@ -1,8 +1,9 @@
 import os
 import json
 import asyncio
+import httpx
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from pydantic import BaseModel
 
 from fastapi import (
@@ -32,6 +33,17 @@ from ..models import (
     BatchAuthTokenResponse,
     BatchKeyCreateRequest,
     BatchKeyCreateResponse,
+    ProjectCreateRequest,
+    ProjectUpdateRequest,
+    ExternalKeyCreateRequest,
+    ExternalKeyUpdateRequest,
+    SubKeyCreateRequest,
+    GatewayAllocationResponse,
+    MODEL_TIER_MAPPING,
+    MODEL_TIER_ORDER,
+    is_tier_allowed,
+    resolve_model_tier,
+    get_model_for_tier,
 )
 from ..state import state_store
 
@@ -512,3 +524,442 @@ async def sse_stats(request: Request):
             await asyncio.sleep(3.0)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+# =============================================================================
+# External Key Authentication & Gateway Security
+# =============================================================================
+
+def extract_external_key_from_request(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    x_pairing_code: Optional[str] = Header(None, alias="X-Pairing-Code"),
+    key: Optional[str] = Query(None),
+) -> Optional[str]:
+    """Extract external API key or pairing code from headers, query string, or bearer token."""
+    # 1. Query parameter
+    if key and isinstance(key, str) and key.strip():
+        return key.strip()
+    for q_param in ("key", "api_key", "token", "pairing_code"):
+        val = request.query_params.get(q_param)
+        if val and isinstance(val, str) and val.strip():
+            return val.strip()
+
+    # 2. Custom header X-API-Key or X-Pairing-Code
+    if x_api_key and isinstance(x_api_key, str) and x_api_key.strip():
+        return x_api_key.strip()
+    if x_pairing_code and isinstance(x_pairing_code, str) and x_pairing_code.strip():
+        return x_pairing_code.strip()
+
+    for h_name in ("X-API-Key", "x-api-key", "X-Pairing-Code", "x-pairing-code"):
+        h_val = request.headers.get(h_name)
+        if h_val and isinstance(h_val, str) and h_val.strip():
+            return h_val.strip()
+
+    # 3. Authorization Bearer header
+    auth_val = authorization if isinstance(authorization, str) else request.headers.get("Authorization")
+    if auth_val:
+        parts = auth_val.strip().split()
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            return parts[1].strip()
+        elif len(parts) == 1:
+            return parts[0].strip()
+
+    return None
+
+
+async def verify_gateway_access(
+    request: Request,
+    token: Optional[str] = Depends(extract_external_key_from_request),
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Validate external key or pairing code and check project/key spending limits."""
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": {
+                    "message": "Missing API Key or Pairing Code. Provide via 'Authorization: Bearer <key>', 'X-API-Key: <key>', or '?key=<key>'.",
+                    "type": "authentication_error",
+                    "code": "missing_api_key",
+                }
+            },
+        )
+
+    is_valid, key_meta, project, err_msg = state_store.validate_external_key(token)
+    if not is_valid:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": {
+                    "message": err_msg,
+                    "type": "permission_denied",
+                    "code": "allocation_denied",
+                    "key_id": key_meta.get("id") if key_meta else None,
+                    "project": project.get("name") if project else None,
+                }
+            },
+        )
+    return key_meta, project
+
+
+# =============================================================================
+# Project & Allocation Management APIs (Admin Dashboard)
+# =============================================================================
+
+@app.get("/api/projects", dependencies=[Depends(require_auth)])
+async def list_projects():
+    """List all projects with live spend, limits, and connected keys count."""
+    return {"projects": state_store.list_projects()}
+
+
+@app.post("/api/projects", dependencies=[Depends(require_auth)])
+async def create_project(req: ProjectCreateRequest):
+    """Create a new project allocation."""
+    try:
+        proj = state_store.create_project(
+            name=req.name,
+            description=req.description or "",
+            daily_limit_usd=req.daily_limit_usd,
+            weekly_limit_usd=req.weekly_limit_usd,
+            default_sub_key_daily_usd=req.default_sub_key_daily_usd,
+            max_model_tier=req.max_model_tier,
+        )
+        return {"success": True, "project": proj}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/projects/{project_id}", dependencies=[Depends(require_auth)])
+async def get_project(project_id: str):
+    """Get project details."""
+    proj = state_store.get_project(project_id)
+    if not proj:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
+    return {"project": proj}
+
+
+@app.patch("/api/projects/{project_id}", dependencies=[Depends(require_auth)])
+async def update_project(project_id: str, req: ProjectUpdateRequest):
+    """Update project budget limits, tier ceiling, or status."""
+    updates = req.dict(exclude_unset=True)
+    proj = state_store.update_project(project_id, **updates)
+    if not proj:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
+    return {"success": True, "project": proj}
+
+
+@app.delete("/api/projects/{project_id}", dependencies=[Depends(require_auth)])
+async def delete_project(project_id: str):
+    """Delete project and deactivate its keys."""
+    success = state_store.delete_project(project_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Cannot delete default project or project not found.")
+    return {"success": True, "message": f"Project '{project_id}' deleted."}
+
+
+# =============================================================================
+# External Keys & Sub-Keys APIs (Admin Dashboard)
+# =============================================================================
+
+@app.get("/api/external-keys", dependencies=[Depends(require_auth)])
+async def list_external_keys(project_id: Optional[str] = Query(None)):
+    """List all external keys, optionally filtered by project."""
+    keys = state_store.list_external_keys(project_id=project_id)
+    return {"keys": keys}
+
+
+@app.post("/api/external-keys", dependencies=[Depends(require_auth)])
+async def create_external_key(req: ExternalKeyCreateRequest):
+    """Generate an external access key for an agent or client service."""
+    try:
+        key_record = state_store.create_external_key(
+            project_id=req.project_id,
+            name=req.name,
+            daily_limit_usd=req.daily_limit_usd,
+            weekly_limit_usd=req.weekly_limit_usd,
+            limit_period=req.limit_period,
+            max_model_tier=req.max_model_tier,
+            prefix=req.prefix,
+            notes=req.notes or "",
+            created_by="admin",
+            key_type="ADMIN_EXTERNAL",
+        )
+        return {"success": True, "key": key_record}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/external-keys/{key_id}/subkeys", dependencies=[Depends(require_auth)])
+async def create_sub_key_admin(key_id: str, req: SubKeyCreateRequest):
+    """Admin endpoint to create a sub-key under an existing external key."""
+    try:
+        sub_key = state_store.create_sub_key(
+            parent_key_or_token=key_id,
+            name=req.name,
+            amount_usd=req.amount_usd,
+            period=req.period,
+            max_model_tier=req.max_model_tier,
+            notes=req.notes,
+        )
+        return {"success": True, "key": sub_key}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.patch("/api/external-keys/{key_id}", dependencies=[Depends(require_auth)])
+async def update_external_key(key_id: str, req: ExternalKeyUpdateRequest):
+    """Update allocation limit, model tier, or status of an external key."""
+    updates = req.dict(exclude_unset=True)
+    k = state_store.update_external_key(key_id, **updates)
+    if not k:
+        raise HTTPException(status_code=404, detail=f"External key '{key_id}' not found.")
+    return {"success": True, "key": k}
+
+
+@app.delete("/api/external-keys/{key_id}", dependencies=[Depends(require_auth)])
+async def revoke_external_key(key_id: str):
+    """Revoke an external key."""
+    success = state_store.revoke_external_key(key_id)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"External key '{key_id}' not found.")
+    return {"success": True, "message": f"Key '{key_id}' revoked."}
+
+
+# =============================================================================
+# Cloudflare Gateway Configuration & Tier Info APIs
+# =============================================================================
+
+class GatewayConfigUpdate(BaseModel):
+    cloudflare_gateway_url: Optional[str] = None
+
+
+@app.get("/api/gateway/info", dependencies=[Depends(require_auth)])
+async def get_gateway_info(request: Request):
+    """Return Cloudflare gateway URL, available tiers, and client connection snippets."""
+    gw_url = state_store.get_cloudflare_gateway_url() or str(request.base_url).rstrip("/")
+    return {
+        "cloudflare_gateway_url": state_store.get_cloudflare_gateway_url(),
+        "effective_gateway_url": gw_url,
+        "tiers": MODEL_TIER_MAPPING,
+        "tier_order": MODEL_TIER_ORDER,
+        "total_projects": len(state_store.list_projects()),
+        "total_external_keys": len(state_store.list_external_keys()),
+        "curl_example": f"curl -X POST {gw_url}/v1/chat/completions \\\n  -H 'Authorization: Bearer <EXTERNAL_KEY_OR_PAIRING_CODE>' \\\n  -H 'Content-Type: application/json' \\\n  -d '{{\"model\": \"xs\", \"messages\": [{{\"role\": \"user\", \"content\": \"Hello!\"}}]}}'",
+    }
+
+
+@app.post("/api/gateway/config", dependencies=[Depends(require_auth)])
+async def update_gateway_config(req: GatewayConfigUpdate):
+    """Update public Cloudflare DNS gateway endpoint URL."""
+    state_store.set_cloudflare_gateway_url(req.cloudflare_gateway_url)
+    return {
+        "success": True,
+        "cloudflare_gateway_url": state_store.get_cloudflare_gateway_url(),
+    }
+
+
+# =============================================================================
+# OpenAI-Compatible External Gateway Endpoints (Via Cloudflare DNS / External Keys)
+# =============================================================================
+
+@app.get("/v1/models")
+@app.get("/api/gateway/models")
+async def gateway_list_models(
+    auth: Tuple[Dict[str, Any], Dict[str, Any]] = Depends(verify_gateway_access),
+):
+    """List available model sizes (xs to xl) and underlying models permitted for this key."""
+    key_meta, project = auth
+    max_tier = key_meta.get("max_model_tier", "xl")
+
+    models_list = []
+    # Add tier representations
+    for tier in MODEL_TIER_ORDER:
+        if is_tier_allowed(tier, max_tier):
+            t_data = MODEL_TIER_MAPPING[tier]
+            models_list.append({
+                "id": tier,
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "venice-gateway",
+                "permission": [],
+                "root": t_data["default_model"],
+                "parent": None,
+                "tier": tier,
+                "label": t_data["label"],
+                "description": t_data["description"],
+                "default_model": t_data["default_model"],
+            })
+            # Also include explicit underlying Venice models for this tier
+            for m_id in t_data.get("models", []):
+                models_list.append({
+                    "id": m_id,
+                    "object": "model",
+                    "created": 1700000000,
+                    "owned_by": "venice-ai",
+                    "permission": [],
+                    "root": m_id,
+                    "parent": None,
+                    "tier": tier,
+                })
+
+    return {"object": "list", "data": models_list}
+
+
+@app.get("/v1/allocation")
+@app.get("/api/gateway/allocation")
+async def gateway_get_allocation(
+    auth: Tuple[Dict[str, Any], Dict[str, Any]] = Depends(verify_gateway_access),
+):
+    """Inspect remaining inference balance, allowed tier, and project info for caller's key."""
+    key_meta, project = auth
+    daily_limit = float(key_meta.get("daily_limit_usd", 0.25))
+    spent_today = float(key_meta.get("current_period_spend", 0.0))
+    remaining = max(0.0, round(daily_limit - spent_today, 4))
+
+    return GatewayAllocationResponse(
+        key_name=key_meta.get("name", "External Key"),
+        project_id=project.get("id", ""),
+        project_name=project.get("name", "General Project"),
+        key_type=key_meta.get("key_type", "EXTERNAL"),
+        daily_limit_usd=daily_limit,
+        spent_today_usd=spent_today,
+        remaining_today_usd=remaining,
+        limit_period=key_meta.get("limit_period", "DAY"),
+        max_model_tier=key_meta.get("max_model_tier", "xl"),
+        status=key_meta.get("status", "active"),
+        cloudflare_gateway_url=state_store.get_cloudflare_gateway_url(),
+    )
+
+
+@app.post("/v1/subkeys")
+@app.post("/api/gateway/subkeys")
+async def gateway_create_subkey(
+    req: SubKeyCreateRequest,
+    auth: Tuple[Dict[str, Any], Dict[str, Any]] = Depends(verify_gateway_access),
+):
+    """
+    Allow external services/agents to create sub-keys with spend caps per project per day or week.
+    By default unless created by admin is: 25 cents per project per day.
+    """
+    key_meta, project = auth
+    parent_token = key_meta.get("token") or key_meta.get("id")
+
+    # Enforce parent tier limit
+    requested_tier = req.max_model_tier or key_meta.get("max_model_tier", "xl")
+    if not is_tier_allowed(requested_tier, key_meta.get("max_model_tier", "xl")):
+        requested_tier = key_meta.get("max_model_tier", "xl")
+
+    # Enforce default: 25 cents per project per day unless created by admin
+    amount = req.amount_usd if (req.amount_usd is not None and req.amount_usd > 0) else 0.25
+    parent_daily = float(key_meta.get("daily_limit_usd", 0.25))
+    # Cap at parent's daily limit
+    if req.period.upper() == "DAY" and amount > parent_daily:
+        amount = parent_daily
+
+    try:
+        subkey = state_store.create_sub_key(
+            parent_key_or_token=parent_token,
+            name=req.name,
+            amount_usd=amount,
+            period=req.period,
+            max_model_tier=requested_tier,
+            notes=req.notes or f"Generated via external gateway by {key_meta.get('name')}",
+        )
+        return {
+            "success": True,
+            "sub_key": subkey,
+            "message": f"Sub-key generated with ${amount:.2f} USD per {req.period.lower()} allocation.",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/chat/completions")
+@app.post("/api/gateway/chat/completions")
+async def gateway_chat_completions(
+    request: Request,
+    auth: Tuple[Dict[str, Any], Dict[str, Any]] = Depends(verify_gateway_access),
+):
+    """
+    OpenAI-compatible gated chat completion proxy:
+    - Enforces model tier hierarchy (xs to xl).
+    - Checks remaining project/key allocation.
+    - Proxies request to Venice API.
+    - Atomically meters token usage and updates balance in real-time.
+    """
+    key_meta, project = auth
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail={"error": {"message": "Invalid JSON body"}})
+
+    raw_model = body.get("model", "s")
+    resolved_tier = resolve_model_tier(raw_model)
+    max_tier = key_meta.get("max_model_tier", "xl")
+
+    # 1. Tier enforcement
+    if not is_tier_allowed(resolved_tier, max_tier):
+        allowed = [t for t in MODEL_TIER_ORDER if is_tier_allowed(t, max_tier)]
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": {
+                    "message": (
+                        f"Requested model '{raw_model}' corresponds to tier '{resolved_tier.upper()}', "
+                        f"which exceeds this key's maximum tier limit of '{max_tier.upper()}'. "
+                        f"Allowed tiers: {', '.join(allowed)}."
+                    ),
+                    "type": "permission_denied",
+                    "code": "model_tier_exceeded",
+                    "requested_tier": resolved_tier,
+                    "max_tier": max_tier,
+                    "allowed_tiers": allowed,
+                }
+            },
+        )
+
+    # 2. Map tier alias to concrete Venice model if needed
+    if raw_model.lower().strip() in MODEL_TIER_ORDER:
+        body["model"] = get_model_for_tier(resolved_tier)
+
+    # 3. Proxy to Venice API
+    response_data = await client.chat_completion(body)
+
+    if "error" in response_data:
+        # Pass through upstream error
+        return JSONResponse(status_code=502, content=response_data)
+
+    # 4. Compute token consumption and metering cost
+    usage = response_data.get("usage", {})
+    prompt_tokens = int(usage.get("prompt_tokens", 0))
+    completion_tokens = int(usage.get("completion_tokens", 0))
+    total_tokens = int(usage.get("total_tokens", prompt_tokens + completion_tokens))
+
+    tier_info = MODEL_TIER_MAPPING.get(resolved_tier, MODEL_TIER_MAPPING["m"])
+    cost_usd = (
+        (prompt_tokens * tier_info["cost_per_m_in"]) +
+        (completion_tokens * tier_info["cost_per_m_out"])
+    ) / 1_000_000.0
+
+    # Ensure small nominal cost even on tiny zero-token completions to prevent abuse
+    cost_usd = max(0.0001, round(cost_usd, 6))
+
+    # 5. Record usage against key and project
+    state_store.record_external_usage(
+        key_id=key_meta.get("id"),
+        project_id=project.get("id"),
+        cost_usd=cost_usd,
+        tokens=total_tokens,
+    )
+
+    # 6. Attach usage metadata headers
+    headers = {
+        "X-VKM-Project-Id": str(project.get("id")),
+        "X-VKM-Key-Id": str(key_meta.get("id")),
+        "X-VKM-Model-Tier": resolved_tier,
+        "X-VKM-Cost-USD": f"{cost_usd:.6f}",
+    }
+
+    return JSONResponse(content=response_data, headers=headers)

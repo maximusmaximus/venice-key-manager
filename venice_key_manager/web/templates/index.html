@@ -114,6 +114,7 @@
     <nav class="nav-tabs-bar">
       <div class="tabs-left">
         <button class="nav-tab active" data-tab="tab-keys">🔑 API Keys (<span id="tab-keys-count">0</span>)</button>
+        <button class="nav-tab" data-tab="tab-allocations">🌐 External Allocations (<span id="tab-projects-count">0</span>)</button>
         <button class="nav-tab" data-tab="tab-models">🧠 Models & Privacy (<span id="tab-models-count">0</span>)</button>
         <button class="nav-tab" data-tab="tab-playground">⚡ Light Inference Playground</button>
         <button class="nav-tab" data-tab="tab-mcp">🔌 MCP Tools & Server</button>
@@ -305,6 +306,161 @@
             <div class="tool-item"><code>venice_test_inference</code> - Quick health benchmark</div>
             <div class="tool-item"><code>venice_export_backup</code> - Full state JSON backup</div>
           </div>
+        </div>
+    <!-- TAB 5: EXTERNAL ALLOCATIONS & GATED INFERENCE -->
+    <section id="tab-allocations" class="tab-pane">
+      <!-- Gateway DNS & Connectivity Banner -->
+      <div class="gateway-header-card mb-4">
+        <div class="flex-between align-center mb-3">
+          <div>
+            <h3 class="card-title text-base flex align-center gap-2">
+              <span>🌐 Cloudflare DNS Gateway & Keyed Gated Inference</span>
+              <span class="badge badge-primary">OpenAI v1 Compatible</span>
+            </h3>
+            <p class="card-subtitle text-xs">
+              Allow external services, multi-agent frameworks, and client apps to request gated inference allocations via Cloudflare DNS with selectable model tiers (<code>xs</code> to <code>xl</code>) and spend caps.
+            </p>
+          </div>
+        </div>
+
+        <!-- Cloudflare Gateway URL Configuration -->
+        <div class="gateway-config-row">
+          <div class="form-group flex-1 mb-0">
+            <label class="form-label text-xs">Cloudflare Gateway Public DNS Endpoint</label>
+            <div class="flex gap-2">
+              <input type="text" id="cfg-cf-gateway-url" class="form-control form-control-sm mono flex-1" placeholder="https://venice-gateway.yourdomain.com (defaults to local host if empty)" />
+              <button class="btn btn-primary btn-sm" id="btn-save-cf-url">💾 Save Endpoint</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Model Tier Cards -->
+        <div class="model-tiers-summary mt-3">
+          <div class="text-xs font-semibold text-muted mb-2">AVAILABLE MODEL SIZES & ROUTING:</div>
+          <div class="tier-cards-grid">
+            <div class="tier-card tier-xs">
+              <div class="tier-badge">XS</div>
+              <div class="tier-title">Ultra Fast / 3B</div>
+              <div class="tier-model text-xs mono">llama-3.2-3b</div>
+              <div class="tier-cost text-xs text-muted">$0.05 / $0.10 per 1M</div>
+            </div>
+            <div class="tier-card tier-s">
+              <div class="tier-badge">S</div>
+              <div class="tier-title">Fast / Flash</div>
+              <div class="tier-model text-xs mono">deepseek-v4-flash</div>
+              <div class="tier-cost text-xs text-muted">$0.15 / $0.60 per 1M</div>
+            </div>
+            <div class="tier-card tier-m">
+              <div class="tier-badge">M</div>
+              <div class="tier-title">Medium / 70B</div>
+              <div class="tier-model text-xs mono">llama-3.3-70b</div>
+              <div class="tier-cost text-xs text-muted">$0.40 / $1.20 per 1M</div>
+            </div>
+            <div class="tier-card tier-l">
+              <div class="tier-badge">L</div>
+              <div class="tier-title">Reasoning / R1</div>
+              <div class="tier-model text-xs mono">deepseek-r1</div>
+              <div class="tier-cost text-xs text-muted">$1.50 / $4.00 per 1M</div>
+            </div>
+            <div class="tier-card tier-xl">
+              <div class="tier-badge">XL</div>
+              <div class="tier-title">Flagship / 405B</div>
+              <div class="tier-model text-xs mono">llama-3.1-405b / E2EE</div>
+              <div class="tier-cost text-xs text-muted">$3.00 / $8.00 per 1M</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Connection Code Snippet -->
+        <div class="connection-snippet-box mt-3">
+          <div class="snippet-header flex-between align-center">
+            <span class="text-xs font-semibold text-accent">⚡ Client Connection Example (cURL / Python)</span>
+            <div class="flex gap-2">
+              <button class="btn btn-xs btn-outline" id="btn-copy-gw-curl">📋 Copy cURL</button>
+              <button class="btn btn-xs btn-outline" id="btn-copy-gw-py">📋 Copy Python</button>
+            </div>
+          </div>
+          <pre id="gw-snippet-pre" class="code-box-sm mono text-xs mt-2">curl -X POST https://venice-gateway.yourdomain.com/v1/chat/completions \
+  -H "Authorization: Bearer &lt;EXTERNAL_KEY_OR_PAIRING_CODE&gt;" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "xs", "messages": [{"role": "user", "content": "Hello!"}]}'</pre>
+        </div>
+      </div>
+
+      <!-- Section: Projects & Inference Pools -->
+      <div class="content-section-header flex-between align-center mb-2">
+        <div>
+          <h3 class="text-base font-semibold">📁 Projects & External Services</h3>
+          <p class="text-xs text-muted">Manage projects that external services or agents use to provide inference and quality.</p>
+        </div>
+        <button class="btn btn-primary btn-sm" id="btn-open-create-project">
+          ➕ New Project
+        </button>
+      </div>
+
+      <div class="table-card mb-4">
+        <div class="table-responsive">
+          <table class="data-table" id="projects-table">
+            <thead>
+              <tr>
+                <th>Project Name</th>
+                <th>Daily Limit (USD)</th>
+                <th>Weekly Limit</th>
+                <th>Default Sub-Key Cap</th>
+                <th>Max Model Tier</th>
+                <th>Spent Today</th>
+                <th>Connected Keys</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="projects-tbody">
+              <tr>
+                <td colspan="9" class="text-center py-6 text-muted">Loading projects...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Section: External Keys & Sub-Keys -->
+      <div class="content-section-header flex-between align-center mb-2">
+        <div>
+          <h3 class="text-base font-semibold">🔑 External Keys & Agent Allocations</h3>
+          <p class="text-xs text-muted">Keyed gated inference keys and delegation sub-keys for connected agents.</p>
+        </div>
+        <div class="flex gap-2">
+          <select id="filter-ext-project" class="form-control form-control-sm">
+            <option value="">All Projects</option>
+          </select>
+          <button class="btn btn-primary btn-sm" id="btn-open-create-ext-key">
+            ➕ Generate External Key
+          </button>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <div class="table-responsive">
+          <table class="data-table" id="ext-keys-table">
+            <thead>
+              <tr>
+                <th>Key Name / Agent</th>
+                <th>Project</th>
+                <th>Key Type</th>
+                <th>Token</th>
+                <th>Allocation Limit</th>
+                <th>Spent Today</th>
+                <th>Max Tier</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="ext-keys-tbody">
+              <tr>
+                <td colspan="9" class="text-center py-6 text-muted">Loading external keys...</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </section>
@@ -777,6 +933,294 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" data-close-modal="modal-report">Close</button>
+      </div>
+    </div>
+  <!-- ========================================================================= -->
+  <!-- MODAL: CREATE PROJECT -->
+  <!-- ========================================================================= -->
+  <div id="modal-create-project" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">📁 Create Project Allocation</h3>
+        <button class="modal-close" data-close-modal="modal-create-project">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Project / Service Name <span class="required">*</span></label>
+          <input type="text" id="proj-create-name" class="form-control" placeholder="e.g. Autonomous Agent Fleet Alpha" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Description</label>
+          <input type="text" id="proj-create-desc" class="form-control" placeholder="Purpose, client team, or service type" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Project Daily Spend Limit (USD)</label>
+          <input type="number" step="0.05" min="0.10" id="proj-create-daily" class="form-control" value="2.00" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Project Weekly Spend Limit (USD, Optional)</label>
+          <input type="number" step="0.50" min="0.50" id="proj-create-weekly" class="form-control" placeholder="Optional weekly ceiling" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Default Sub-Key Daily Cap (USD)</label>
+          <input type="number" step="0.05" min="0.05" id="proj-create-default-sub" class="form-control" value="0.25" />
+          <p class="form-hint">Default is $0.25 per project per day unless configured differently.</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Maximum Permitted Model Tier</label>
+          <select id="proj-create-tier" class="form-control">
+            <option value="xs">XS - Ultra Fast / 3B ($0.05 / 1M)</option>
+            <option value="s">S - Fast / Flash ($0.15 / 1M)</option>
+            <option value="m">M - Medium / 70B ($0.40 / 1M)</option>
+            <option value="l">L - Large / R1 Reasoning ($1.50 / 1M)</option>
+            <option value="xl" selected>XL - Flagship / 405B & E2EE ($3.00 / 1M)</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal="modal-create-project">Cancel</button>
+        <button class="btn btn-primary" id="btn-submit-create-project">Create Project</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: EDIT PROJECT -->
+  <!-- ========================================================================= -->
+  <div id="modal-edit-project" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">✏️ Edit Project Allocation</h3>
+        <button class="modal-close" data-close-modal="modal-edit-project">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="proj-edit-id" />
+        <div class="form-group">
+          <label class="form-label">Project Name</label>
+          <input type="text" id="proj-edit-name" class="form-control" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Project Daily Limit (USD)</label>
+          <input type="number" step="0.05" min="0.10" id="proj-edit-daily" class="form-control" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Default Sub-Key Daily Cap (USD)</label>
+          <input type="number" step="0.05" min="0.05" id="proj-edit-default-sub" class="form-control" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max Model Tier</label>
+          <select id="proj-edit-tier" class="form-control">
+            <option value="xs">XS - Ultra Fast / 3B</option>
+            <option value="s">S - Fast / Flash</option>
+            <option value="m">M - Medium / 70B</option>
+            <option value="l">L - Large / R1</option>
+            <option value="xl">XL - Flagship / 405B & E2EE</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Project Status</label>
+          <select id="proj-edit-status" class="form-control">
+            <option value="active">Active (Permit inference)</option>
+            <option value="paused">Paused (Block inference)</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal="modal-edit-project">Cancel</button>
+        <button class="btn btn-primary" id="btn-submit-edit-project">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: GENERATE EXTERNAL KEY -->
+  <!-- ========================================================================= -->
+  <div id="modal-create-ext-key" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">🔑 Generate External Use Key</h3>
+        <button class="modal-close" data-close-modal="modal-create-ext-key">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Target Project <span class="required">*</span></label>
+          <select id="ext-key-project-select" class="form-control"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Agent / Client Label <span class="required">*</span></label>
+          <input type="text" id="ext-key-name" class="form-control" placeholder="e.g. hermes-agent-cloud or dev-subagent-01" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Daily Spend Limit (USD)</label>
+          <input type="number" step="0.05" min="0.05" id="ext-key-daily-limit" class="form-control" value="0.25" />
+          <p class="form-hint">Default allocation is $0.25 USD per project per day.</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Limit Period</label>
+          <select id="ext-key-period" class="form-control">
+            <option value="DAY" selected>Per Day (Rolling 24h UTC)</option>
+            <option value="WEEK">Per Week (Rolling 7d)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Maximum Model Tier (xs to xl)</label>
+          <select id="ext-key-tier" class="form-control">
+            <option value="xs">XS - Ultra Fast / 3B</option>
+            <option value="s">S - Fast / Flash</option>
+            <option value="m">M - Medium / 70B</option>
+            <option value="l">L - Large / R1</option>
+            <option value="xl" selected>XL - Flagship / 405B & E2EE</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Key Prefix</label>
+          <input type="text" id="ext-key-prefix" class="form-control mono" value="vkm_ext_" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Notes (Optional)</label>
+          <input type="text" id="ext-key-notes" class="form-control" placeholder="Target service IP, purpose, or owner" />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal="modal-create-ext-key">Cancel</button>
+        <button class="btn btn-primary" id="btn-submit-create-ext-key">Generate Key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: CREATE SUB-KEY -->
+  <!-- ========================================================================= -->
+  <div id="modal-create-sub-key" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">🌱 Delegate Sub-Key</h3>
+        <button class="modal-close" data-close-modal="modal-create-sub-key">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="sub-key-parent-id" />
+        <div class="alert-box-info mb-3">
+          Parent Key: <strong id="sub-key-parent-label">--</strong>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Sub-Key / Sub-Agent Name <span class="required">*</span></label>
+          <input type="text" id="sub-key-name" class="form-control" placeholder="e.g. subagent-worker-1" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Allocated Spend Amount (USD)</label>
+          <input type="number" step="0.05" min="0.05" id="sub-key-amount" class="form-control" value="0.25" />
+          <p class="form-hint">By default unless created by admin: 25 cents per project per day.</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Allocation Period</label>
+          <select id="sub-key-period" class="form-control">
+            <option value="DAY" selected>Per Day</option>
+            <option value="WEEK">Per Week</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max Model Tier</label>
+          <select id="sub-key-tier" class="form-control">
+            <option value="xs">XS - Ultra Fast / 3B</option>
+            <option value="s">S - Fast / Flash</option>
+            <option value="m">M - Medium / 70B</option>
+            <option value="l">L - Large / R1</option>
+            <option value="xl">XL - Flagship / 405B & E2EE</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Notes</label>
+          <input type="text" id="sub-key-notes" class="form-control" placeholder="Agent delegation notes" />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal="modal-create-sub-key">Cancel</button>
+        <button class="btn btn-primary" id="btn-submit-create-sub-key">Create Sub-Key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: EDIT EXTERNAL KEY ALLOCATION -->
+  <!-- ========================================================================= -->
+  <div id="modal-edit-ext-key" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">✏️ Modify External Key Allocation</h3>
+        <button class="modal-close" data-close-modal="modal-edit-ext-key">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="ext-edit-key-id" />
+        <div class="form-group">
+          <label class="form-label">Key / Agent Name</label>
+          <input type="text" id="ext-edit-name" class="form-control" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Daily Spend Limit (USD)</label>
+          <input type="number" step="0.05" min="0.05" id="ext-edit-daily-limit" class="form-control" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Maximum Model Tier</label>
+          <select id="ext-edit-tier" class="form-control">
+            <option value="xs">XS - Ultra Fast / 3B</option>
+            <option value="s">S - Fast / Flash</option>
+            <option value="m">M - Medium / 70B</option>
+            <option value="l">L - Large / R1</option>
+            <option value="xl">XL - Flagship / 405B & E2EE</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Status</label>
+          <select id="ext-edit-status" class="form-control">
+            <option value="active">Active</option>
+            <option value="paused">Paused</option>
+            <option value="revoked">Revoked</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal="modal-edit-ext-key">Cancel</button>
+        <button class="btn btn-primary" id="btn-submit-edit-ext-key">Update Allocation</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: EXTERNAL KEY REVEALED -->
+  <!-- ========================================================================= -->
+  <div id="modal-ext-key-revealed" class="modal-backdrop hidden">
+    <div class="modal-box modal-lg">
+      <div class="modal-header">
+        <h3 class="modal-title">🎉 External Key Generated</h3>
+        <button class="modal-close" data-close-modal="modal-ext-key-revealed">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="alert-box-success mb-3">
+          <strong>External Key Active:</strong> Use this key or pairing code to access gated inference via Cloudflare DNS.
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Key Token</label>
+          <div class="copy-input-row">
+            <input type="text" id="revealed-ext-key-token" class="form-control mono" readonly />
+            <button class="btn btn-primary copy-btn" data-copy-target="revealed-ext-key-token">📋 Copy Key</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">cURL Command</label>
+          <div class="code-box-scroll mono text-xs" id="revealed-ext-key-curl"></div>
+          <button class="btn btn-xs btn-outline copy-btn mt-2" data-copy-target="revealed-ext-key-curl">📋 Copy cURL</button>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Python OpenAI Client Snippet</label>
+          <pre class="code-box-scroll mono text-xs" id="revealed-ext-key-py"></pre>
+          <button class="btn btn-xs btn-outline copy-btn mt-2" data-copy-target="revealed-ext-key-py">📋 Copy Python</button>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal="modal-ext-key-revealed">Done</button>
       </div>
     </div>
   </div>
