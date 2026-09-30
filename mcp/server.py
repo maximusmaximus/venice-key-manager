@@ -308,6 +308,90 @@ class VeniceMCPServer:
                     },
                     "required": ["name", "base_url"]
                 }
+            },
+            {
+                "name": "venice_validate_guest_key",
+                "description": "Ingests and validates a candidate Venice key without storing it, performing live balance check and inference latency test.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "The candidate Venice API key to test and validate."
+                        }
+                    },
+                    "required": ["key"]
+                }
+            },
+            {
+                "name": "venice_create_subkey",
+                "description": "Mints an agent sub-key with custom or default ($0.25) daily budget cap and quality tier limit (xs to xl), with optional automatic deployment to an agent.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "label": {
+                            "type": "string",
+                            "description": "Description / label for the sub-key (e.g. 'Hermes Audio Worker')."
+                        },
+                        "budget_usd": {
+                            "type": "number",
+                            "description": "Maximum USD consumption budget limit (default: 0.25)."
+                        },
+                        "period": {
+                            "type": "string",
+                            "enum": ["DAY", "MONTH"],
+                            "description": "Budget reset cycle (DAY or MONTH). Defaults to 'DAY'."
+                        },
+                        "quality_tier": {
+                            "type": "string",
+                            "enum": ["xs", "s", "m", "l", "xl"],
+                            "description": "Maximum model quality tier permitted for this sub-key (default: 's')."
+                        },
+                        "target_agent": {
+                            "type": "string",
+                            "description": "Optional agent to immediately deploy this sub-key to (e.g. 'hermes-music', 'a2a-node')."
+                        },
+                        "target_node": {
+                            "type": "string",
+                            "description": "Target machine node ('local' or 'mcmini'). Defaults to 'local'."
+                        }
+                    },
+                    "required": ["label"]
+                }
+            },
+            {
+                "name": "venice_apply_agent_key",
+                "description": "Deploys a sub-key or master key to a target agent configuration on local or remote fleet node.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "agent_name": {
+                            "type": "string",
+                            "description": "Name of the agent (e.g. 'hermes-music', 'a2a-node', 'dawagent', 'worker-audio')."
+                        },
+                        "subkey_id": {
+                            "type": "string",
+                            "description": "Optional ID of the subkey to deploy."
+                        },
+                        "key_string": {
+                            "type": "string",
+                            "description": "Optional explicit key string to deploy."
+                        },
+                        "target_node": {
+                            "type": "string",
+                            "description": "Target machine node ('local' or 'mcmini'). Defaults to 'local'."
+                        }
+                    },
+                    "required": ["agent_name"]
+                }
+            },
+            {
+                "name": "venice_get_pairing_status",
+                "description": "Returns current machine pairing code, configured domain, and whether pairing is active.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
             }
         ]
 
@@ -425,6 +509,100 @@ class VeniceMCPServer:
             base_url = args.get("base_url")
             label_val = args.get("label", "")
             return self.mesh.register_node(name_val, base_url, label=label_val)
+
+        elif name == "venice_validate_guest_key":
+            key_val = args.get("key", "").strip()
+            return client.test_key(key_val)
+
+        elif name == "venice_create_subkey":
+            label = args.get("label", "SubKey")
+            budget = float(args.get("budget_usd", 0.25))
+            period = args.get("period", "DAY")
+            tier = args.get("quality_tier", "s").lower()
+            target_agent = args.get("target_agent")
+            target_node = args.get("target_node", "local")
+
+            admin_key = self.vault.get_venice_admin_key()
+            if admin_key:
+                res = client.create_key(
+                    admin_key=admin_key,
+                    description=label,
+                    key_type="INFERENCE",
+                    limit_usd=budget,
+                    limit_period=period
+                )
+                if not res.get("success"):
+                    return res
+                created_key = res.get("key", {})
+                key_id = created_key.get("id")
+                key_str = res.get("key_string", key_id)
+            else:
+                import uuid
+                key_id = f"sub_{uuid.uuid4().hex[:12]}"
+                key_str = key_id
+
+            sk_record = {
+                "id": key_id,
+                "label": label,
+                "budget_usd": budget,
+                "period": period,
+                "quality_tier": tier,
+                "assigned_agent": target_agent,
+                "assigned_node": target_node,
+                "key_string": key_str
+            }
+            self.vault.store_subkey(sk_record)
+
+            deploy_result = None
+            if target_agent:
+                if target_node == "local" or not target_node:
+                    deploy_result = ConfigDeployer.deploy_venice_key(key_str, agent_name=target_agent)
+                else:
+                    remote_res = self.mesh.call_remote_node(target_node, "/api/subkeys/apply", method="POST", data={
+                        "key_string": key_str,
+                        "agent_name": target_agent,
+                        "subkey_id": key_id
+                    })
+                    deploy_result = remote_res
+
+            return {
+                "success": True,
+                "subkey": sk_record,
+                "deployment": deploy_result
+            }
+
+        elif name == "venice_apply_agent_key":
+            agent_name = args.get("agent_name")
+            target_node = args.get("target_node", "local")
+            subkey_id = args.get("subkey_id")
+            key_string = args.get("key_string")
+
+            if not key_string and subkey_id:
+                for sk in self.vault.get_subkeys():
+                    if sk.get("id") == subkey_id:
+                        key_string = sk.get("key_string")
+                        break
+
+            if not key_string:
+                key_string = self.vault.get_venice_inference_key()
+
+            if target_node == "local" or not target_node:
+                return ConfigDeployer.deploy_venice_key(key_string, agent_name=agent_name)
+            else:
+                return self.mesh.call_remote_node(target_node, "/api/subkeys/apply", method="POST", data={
+                    "key_string": key_string,
+                    "agent_name": agent_name,
+                    "subkey_id": subkey_id
+                })
+
+        elif name == "venice_get_pairing_status":
+            cf = self.vault.get_cloudflare_config()
+            return {
+                "success": True,
+                "pairing_code": self.vault.get_pairing_code(),
+                "pairing_required": self.vault.is_pairing_required(),
+                "domain": cf.get("domain", "")
+            }
 
         return {"error": f"Unknown tool: {name}"}
 

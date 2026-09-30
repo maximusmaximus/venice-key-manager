@@ -12,8 +12,25 @@ from typing import Dict, Any, Optional
 
 DEFAULT_CONFIG_PATH = Path(os.environ.get("AGENT_CONFIG_PATH", "config.yaml"))
 
+AGENT_CONFIG_MAP = {
+    "hermes-music": Path(r"D:\hermes-music\data\config.yaml"),
+    "a2a-node": Path(r"C:\Users\maxin\.gemini\antigravity\scratch\a2a-server\config.yaml"),
+    "dawagent": Path(r"D:\hermes-music\data\dawagent_config.yaml"),
+    "worker-audio": Path(r"D:\hermes-music\data\worker_config.yaml"),
+}
+
 
 class ConfigDeployer:
+    @classmethod
+    def resolve_agent_config(cls, agent_name: str = "", custom_path: Optional[str] = None) -> Path:
+        if custom_path:
+            return Path(custom_path)
+        if agent_name and agent_name in AGENT_CONFIG_MAP:
+            mapped = AGENT_CONFIG_MAP[agent_name]
+            if mapped.exists():
+                return mapped
+        return DEFAULT_CONFIG_PATH
+
     @staticmethod
     def _create_backup(target_path: Path) -> Path:
         backup = target_path.with_suffix(f"{target_path.suffix}.bak")
@@ -21,11 +38,12 @@ class ConfigDeployer:
         return backup
 
     @classmethod
-    def deploy_venice_key(cls, key_string: str, target_path: Optional[Path] = None) -> Dict[str, Any]:
+    def deploy_venice_key(cls, key_string: str, target_path: Optional[Path] = None, agent_name: str = "") -> Dict[str, Any]:
         """
         Deploys a Venice API key into a YAML configuration file under model.api_key.
         """
-        path = Path(target_path or DEFAULT_CONFIG_PATH)
+        resolved_path = cls.resolve_agent_config(agent_name, str(target_path) if target_path else None)
+        path = Path(resolved_path)
         if not path.exists():
             return {"success": False, "error": f"Target file does not exist: {path}"}
 

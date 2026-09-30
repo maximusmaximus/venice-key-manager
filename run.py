@@ -39,6 +39,7 @@ from core.deployer import ConfigDeployer
 from web.server import start_web_server
 from telegram.bot import VeniceTelegramBot
 from mcp.server import VeniceMCPServer
+from core.tunnel import CloudflareTunnelManager
 
 
 def run_all(port: int = 8844):
@@ -46,13 +47,24 @@ def run_all(port: int = 8844):
     print("⚡ VENICE & TELEGRAM // KEY MANAGEMENT & DEPLOYMENT SUITE")
     print("=" * 60)
 
+    vault = KeyVault()
+    tunnel_mgr = CloudflareTunnelManager(vault)
+    cf_conf = vault.get_cloudflare_config()
+    if cf_conf.get("domain") or cf_conf.get("tunnel_token"):
+        print(f"[0/3] Connecting Cloudflare Tunnel ({cf_conf.get('domain', 'proxy')})...")
+        tunnel_res = tunnel_mgr.start_tunnel(local_port=port, daemon=True)
+        if tunnel_res.get("success"):
+            print(f"      Connected! Public URL: {tunnel_res.get('public_url')}")
+        else:
+            print(f"      Notice: {tunnel_res.get('error')}")
+
     # 1. Start Web Server in background daemon thread
     print(f"[1/2] Launching Web Dashboard on http://localhost:{port} ...")
     start_web_server(port=port, daemon=True)
 
     # 2. Start Telegram Bot in main thread
     print("[2/2] Launching Telegram Bot Daemon (@songprocessor_bot) ...")
-    bot = VeniceTelegramBot()
+    bot = VeniceTelegramBot(vault=vault)
     try:
         bot.run()
     except KeyboardInterrupt:

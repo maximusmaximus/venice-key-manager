@@ -230,3 +230,49 @@ class VeniceClient:
         except Exception as e:
             latency_ms = int((time.time() - start_time) * 1000)
             return {"success": False, "latency_ms": latency_ms, "error": str(e)}
+
+    def test_key(self, candidate_key: str) -> Dict[str, Any]:
+        """
+        Validates a candidate Venice API key by querying rate limits / live balances
+        and running a tiny token inference test.
+        Returns status, live balances, quality tier, and latency without saving the key.
+        """
+        if not candidate_key or not candidate_key.strip():
+            return {"success": False, "valid": False, "error": "Empty API key provided"}
+
+        cleaned_key = candidate_key.strip()
+        masked = cleaned_key[:8] + "..." + cleaned_key[-4:] if len(cleaned_key) > 12 else "venice-***"
+
+        # 1. Check rate limits & balances
+        limits_res = self.get_rate_limits(key=cleaned_key)
+        if not limits_res.get("success"):
+            err = limits_res.get("error", "Key validation failed")
+            return {
+                "success": False,
+                "valid": False,
+                "masked_key": masked,
+                "error": err
+            }
+
+        balances = limits_res.get("balances", {})
+        tier = limits_res.get("apiTier", {}).get("id", "paid")
+
+        # 2. Run small ping inference test (15 tokens)
+        infer_res = self.test_inference(
+            prompt="respond with 'OK'",
+            model="deepseek-v4-flash",
+            max_tokens=15,
+            key=cleaned_key
+        )
+        latency = infer_res.get("latency_ms", 0)
+
+        return {
+            "success": True,
+            "valid": True,
+            "masked_key": masked,
+            "balances": balances,
+            "tier": tier,
+            "latency_ms": latency,
+            "inference_test": infer_res.get("content", "OK")
+        }
+

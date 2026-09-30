@@ -32,6 +32,9 @@
             <option value="mcmini">mcmini (Tailscale)</option>
           </select>
         </div>
+        <button class="btn btn-secondary btn-sm" id="btn-toggle-pair" title="Pair machine with secure code">
+          <span id="icon-pair-status">🔒</span> <span id="lbl-pairing-status">Pair Machine</span>
+        </button>
         <button class="btn btn-secondary btn-sm" id="btn-sync-code" title="Pull Latest Code from GitHub">
           <span>🔄</span> Sync Git
         </button>
@@ -41,6 +44,39 @@
         </button>
       </div>
     </header>
+
+    <!-- Guest Mode / Public Key Validator Gate -->
+    <section id="guest-gate-card" class="card" style="margin-bottom: 24px; border: 1px solid var(--accent-purple); background: linear-gradient(180deg, rgba(18, 21, 31, 0.98), rgba(10, 12, 18, 0.99)); display: none;">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+        <div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 20px;">🔒</span>
+            <h2 style="font-size: 18px; font-weight: 700; color: var(--text-main);">Protected Node Gate</h2>
+            <span class="badge badge-purple" id="gate-domain-badge">PUBLIC ACCESS</span>
+          </div>
+          <p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
+            This node is in Protected Mode. Unpaired visitors can ingest & validate Venice API keys below. Node administrators must enter the secure pairing code to unlock full fleet management and agent deployment.
+          </p>
+        </div>
+        <button class="btn btn-primary btn-sm" id="btn-open-pair-modal">
+          <span>🔑</span> Enter Pairing Code
+        </button>
+      </div>
+
+      <!-- Guest Key Ingestion & Balance Sandbox -->
+      <div style="background: var(--bg-input); border-radius: var(--radius-md); padding: 16px; border: 1px solid var(--border-color);">
+        <label style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px; display: block; margin-bottom: 8px;">
+          ⚡ Ingest & Validate Venice API Key
+        </label>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+          <input type="password" id="input-guest-key" class="input-field" placeholder="Paste your Venice API key to test live status and balances..." style="flex: 1; min-width: 280px;" autocomplete="off">
+          <button class="btn btn-primary" id="btn-guest-validate-key">
+            <span>⚡</span> Test & Validate Key
+          </button>
+        </div>
+        <div id="guest-validate-result" style="margin-top: 14px; display: none;"></div>
+      </div>
+    </section>
 
     <!-- Real-time Stats Grid -->
     <section class="stats-grid">
@@ -136,6 +172,9 @@
           <p class="panel-desc">Manage, issue, budget, and deploy programmatic Venice keys for agents and services.</p>
         </div>
         <div class="panel-actions">
+          <button class="btn btn-secondary" id="btn-open-create-subkey" onclick="openModal('modal-create-subkey')">
+            <span>🎟️</span> Mint Agent Sub-Key
+          </button>
           <button class="btn btn-primary" id="btn-open-create-key" onclick="openModal('modal-create-key')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
             Add / Issue Key
@@ -159,6 +198,32 @@
             <tr><td colspan="6" class="text-center text-muted">Loading Venice keys...</td></tr>
           </tbody>
         </table>
+      </div>
+
+      <div style="margin-top: 32px;">
+        <div class="panel-header" style="margin-bottom: 12px;">
+          <div>
+            <h3 class="panel-title" style="font-size: 16px;">Agent Sub-Keys & Budget Caps</h3>
+            <p class="panel-desc">Budget-capped sub-keys ($0.25 default) bound to model tiers (xs to xl) and deployed to agents.</p>
+          </div>
+        </div>
+        <div class="table-container">
+          <table class="data-table" id="table-subkeys">
+            <thead>
+              <tr>
+                <th>Sub-Key Label</th>
+                <th>Model Quality Tier</th>
+                <th>Budget Cap</th>
+                <th>Target Agent / Node</th>
+                <th>Created</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-subkeys">
+              <tr><td colspan="6" class="text-center text-muted">No sub-keys created yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </main>
 
@@ -585,6 +650,96 @@
             <span>🌐</span> Save & Pair Node
           </button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Enter Pairing Code -->
+  <div class="modal-overlay" id="modal-pair-code">
+    <div class="modal card">
+      <div class="modal-header">
+        <h3 class="modal-title">🔒 Unlock Machine Management</h3>
+        <button class="modal-close" onclick="closeModal('modal-pair-code')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+          Enter the secure pairing code for this machine to unlock the vault, key generation, Telegram bot management, and agent deployment.
+        </p>
+        <div class="form-group">
+          <label>Pairing Code</label>
+          <input type="password" id="input-pair-code" class="input-field" placeholder="Enter pairing code (e.g. VK-XXXXXXXX)..." autocomplete="off">
+        </div>
+        <div id="pair-code-error" class="text-danger" style="font-size: 12px; margin-top: 8px; display: none;"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-pair-code')" type="button">Cancel</button>
+        <button class="btn btn-primary" id="btn-submit-pair-code" type="button">
+          <span>🔓</span> Authenticate & Unlock
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Mint Agent Sub-Key -->
+  <div class="modal-overlay" id="modal-create-subkey">
+    <div class="modal card">
+      <div class="modal-header">
+        <h3 class="modal-title">🎟️ Mint Agent Sub-Key</h3>
+        <button class="modal-close" onclick="closeModal('modal-create-subkey')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Sub-Key Label <span class="text-danger">*</span></label>
+          <input type="text" id="subkey-label" class="input-field" placeholder="e.g. Hermes Music Daily Inference">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Model Quality Tier</label>
+            <select id="subkey-quality-tier" class="input-field">
+              <option value="xs">XS (Nano / Ultra-light)</option>
+              <option value="s" selected>S (Flash / Fast - Default)</option>
+              <option value="m">M (Balanced / Mid)</option>
+              <option value="l">L (Large / High Capacity)</option>
+              <option value="xl">XL (Maximum Quality / Frontier)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Budget Limit (USD)</label>
+            <input type="number" id="subkey-budget" class="input-field" value="0.25" step="0.05" min="0.05">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Reset Period</label>
+            <select id="subkey-period" class="input-field">
+              <option value="DAY" selected>Daily Reset</option>
+              <option value="MONTH">Monthly Reset</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Auto-Deploy to Agent</label>
+            <select id="subkey-target-agent" class="input-field">
+              <option value="" selected>None (Generate Only)</option>
+              <option value="hermes-music">hermes-music (D:\hermes-music\data\config.yaml)</option>
+              <option value="a2a-node">a2a-node</option>
+              <option value="dawagent">dawagent</option>
+              <option value="worker-audio">worker-audio</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Target Mesh Node</label>
+          <select id="subkey-target-node" class="input-field">
+            <option value="local" selected>Local Node</option>
+            <option value="mcmini">mcmini (Tailscale)</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-create-subkey')" type="button">Cancel</button>
+        <button class="btn btn-primary" id="btn-confirm-create-subkey" type="button">
+          <span>⚡</span> Mint & Deploy Sub-Key
+        </button>
       </div>
     </div>
   </div>

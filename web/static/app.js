@@ -5,9 +5,47 @@ let appState = {
   fleetNodes: [],
   stats: {},
   keys: [],
+  subkeys: [],
   agentBots: [],
-  rateLimits: []
+  rateLimits: [],
+  authenticated: false,
+  pairingRequired: true,
+  domain: ""
 };
+
+function getPairingCode() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const codeFromUrl = urlParams.get("pairing_code");
+  if (codeFromUrl) {
+    sessionStorage.setItem("venice_pairing_code", codeFromUrl);
+    return codeFromUrl;
+  }
+  return sessionStorage.getItem("venice_pairing_code") || "";
+}
+
+function getAuthHeaders(headers = {}) {
+  const code = getPairingCode();
+  const res = { ...headers };
+  if (code) {
+    res["X-Pairing-Code"] = code;
+  }
+  return res;
+}
+
+async function apiFetch(url, options = {}) {
+  options.headers = getAuthHeaders(options.headers || {});
+  const res = await fetch(url, options);
+  if (res.status === 401) {
+    try {
+      const data = await res.clone().json();
+      if (data && data.requires_pairing) {
+        appState.authenticated = false;
+        updatePairingUI(false);
+      }
+    } catch (_) {}
+  }
+  return res;
+}
 
 // DOM loaded
 document.addEventListener("DOMContentLoaded", () => {
@@ -16,6 +54,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initInference();
   initForms();
   initFleet();
+  initPairingAndSubkeys();
 
   // Initial data load
   refreshAll();
@@ -139,25 +178,84 @@ function showToast(message, type = "success") {
   }, 3500);
 }
 
-// --- Data Fetching ---
+// --- Data Fetching & Pairing Status ---
 
 function getNodeQueryParam() {
   return (appState.activeNode && appState.activeNode !== "local") ? `?node=${encodeURIComponent(appState.activeNode)}` : "";
 }
 
+async function checkPairingStatus() {
+  try {
+    const res = await apiFetch("/api/pairing_status");
+    const data = await res.json();
+    if (data.success) {
+      appState.authenticated = Boolean(data.authenticated);
+      appState.pairingRequired = Boolean(data.requires_pairing);
+      appState.domain = data.domain || "";
+      updatePairingUI(appState.authenticated);
+    }
+  } catch (err) {
+    console.warn("Could not check pairing status:", err);
+  }
+}
+
+function updatePairingUI(isPaired) {
+  const guestGate = document.getElementById("guest-gate-card");
+  const lblPair = document.getElementById("lbl-pairing-status");
+  const iconPair = document.getElementById("icon-pair-status");
+  const domainBadge = document.getElementById("gate-domain-badge");
+
+  if (domainBadge && appState.domain) {
+    domainBadge.innerText = appState.domain.toUpperCase();
+  }
+
+  if (guestGate) {
+    guestGate.style.display = isPaired ? "none" : "block";
+  }
+
+  if (lblPair && iconPair) {
+    if (isPaired) {
+      lblPair.innerText = "Paired (Click to Unpair)";
+      iconPair.innerText = "🔓";
+    } else {
+      lblPair.innerText = "Pair Machine";
+      iconPair.innerText = "🔒";
+    }
+  }
+}
+
 async function refreshAll() {
-  await Promise.all([
-    loadStats(),
-    loadKeys(),
-    loadAgentBots(),
-    loadConfig(),
-    loadFleetNodes()
-  ]);
+  await checkPairingStatus();
+  if (appState.authenticated) {
+    await Promise.all([
+      loadStats(),
+      loadKeys(),
+      loadSubkeys(),
+      loadAgentBots(),
+      loadConfig(),
+      loadFleetNodes()
+    ]);
+  } else {
+    // If not authenticated, load public fleet probes and clear sensitive tables
+    await loadFleetNodes();
+    await loadStats();
+    await loadKeys();
+    await loadSubkeys();
+    await loadAgentBots();
+  }
 }
 
 async function loadStats() {
   try {
-    const res = await fetch(`/api/stats${getNodeQueryParam()}`);
+    const res = await apiFetch(`/api/stats${getNodeQueryParam()}`);
+    if (res.status === 401) {
+      document.getElementById("val-usd-balance").innerText = "$--";
+      document.getElementById("val-diem-balance").innerText = "-- DIEM";
+      document.getElementById("val-bundled-credits").innerText = "--";
+      document.getElementById("val-keys-count").innerText = "--";
+      document.getElementById("val-tg-bots-count").innerText = "--";
+      return;
+    }
     const data = await res.json();
     if (data.success) {
       appState.stats = data;
@@ -198,7 +296,11 @@ async function loadStats() {
 async function loadKeys() {
   const tbody = document.getElementById("tbody-venice-keys");
   try {
-    const res = await fetch(`/api/keys${getNodeQueryParam()}`);
+    const res = await apiFetch(`/api/keys${getNodeQueryParam()}`);
+    if (res.status === 401) {
+      tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted" style="padding: 24px;">🔒 Machine management is locked. Enter the pairing code to view and manage keys.</td></tr>`;
+      return;
+    }
     const data = await res.json();
     if (data.success && data.keys) {
       appState.keys = data.keys;
@@ -252,10 +354,73 @@ async function loadKeys() {
   }
 }
 
+async function loadSubkeys() {
+  const tbody = document.getElementById("tbody-subkeys");
+  if (!tbody) return;
+  try {
+    const res = await apiFetch(`/api/subkeys${getNodeQueryParam()}`);
+    if (res.status === 401) {
+      tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted" style="padding: 24px;">🔒 Machine management is locked. Enter the pairing code to view and mint sub-keys.</td></tr>`;
+      return;
+    }
+    const data = await res.json();
+    if (data.success && data.subkeys) {
+      appState.subkeys = data.subkeys;
+      if (data.subkeys.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted" style="padding: 16px;">No agent sub-keys minted yet. <button class="btn btn-sm btn-secondary" onclick="openModal('modal-create-subkey')" style="margin-left: 8px;">🎟️ Mint Sub-Key</button></td></tr>`;
+        return;
+      }
+      tbody.innerHTML = data.subkeys.map(sk => {
+        const id = sk.id || "N/A";
+        const label = sk.label || "Sub-Key";
+        const tier = (sk.quality_tier || "s").toUpperCase();
+        const budget = sk.budget_usd !== undefined ? `$${Number(sk.budget_usd).toFixed(2)}` : "$0.25";
+        const period = sk.period || "DAY";
+        const agent = sk.assigned_agent || "Unassigned";
+        const node = sk.assigned_node || "local";
+        const created = sk.created_at ? new Date(sk.created_at).toLocaleDateString() : "Active";
+
+        let tierBadgeClass = "badge-green";
+        if (tier === "XS") tierBadgeClass = "badge-cyan";
+        else if (tier === "M") tierBadgeClass = "badge-yellow";
+        else if (tier === "L") tierBadgeClass = "badge-dim";
+        else if (tier === "XL") tierBadgeClass = "badge-purple";
+
+        return `
+          <tr>
+            <td>
+              <div style="font-weight: 600;">${escapeHtml(label)}</div>
+              <div class="text-muted text-mono" style="font-size: 11px;">ID: ${escapeHtml(id)}</div>
+            </td>
+            <td><span class="badge ${tierBadgeClass}">TIER: ${tier}</span></td>
+            <td><strong>${budget}</strong> <span class="text-dim" style="font-size: 11px;">/${period}</span></td>
+            <td>
+              <span class="badge ${agent !== 'Unassigned' ? 'badge-cyan' : 'badge-dim'}">${escapeHtml(agent)}</span>
+              <span class="text-dim text-mono" style="font-size: 11px; margin-left: 4px;">(${escapeHtml(node)})</span>
+            </td>
+            <td><span class="badge badge-green">${created}</span></td>
+            <td>
+              <div style="display: flex; gap: 6px;">
+                <button class="btn btn-sm btn-secondary" onclick="promptApplySubkey('${id}')" title="Deploy to agent">🚀 Apply</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join("");
+    }
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">Failed to load sub-keys: ${err.message}</td></tr>`;
+  }
+}
+
 async function loadAgentBots() {
   const tbody = document.getElementById("tbody-tg-bots");
   try {
-    const res = await fetch(`/api/agent_bots${getNodeQueryParam()}`);
+    const res = await apiFetch(`/api/agent_bots${getNodeQueryParam()}`);
+    if (res.status === 401) {
+      tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted" style="padding: 24px;">🔒 Machine management is locked. Enter the pairing code to view and manage agent bots.</td></tr>`;
+      return;
+    }
     const data = await res.json();
     if (data.success && data.agent_bots) {
       appState.agentBots = data.agent_bots;
@@ -295,7 +460,7 @@ async function loadRateLimits() {
   const tbody = document.getElementById("tbody-rate-limits");
   tbody.innerHTML = `<tr><td colspan="2" class="text-center text-muted">Fetching live rate limits...</td></tr>`;
   try {
-    const res = await fetch("/api/rate_limits");
+    const res = await apiFetch("/api/rate_limits");
     const data = await res.json();
     if (data.success && data.rateLimits) {
       appState.rateLimits = data.rateLimits;
@@ -318,7 +483,7 @@ async function loadRateLimits() {
 
 async function loadConfig() {
   try {
-    const res = await fetch("/api/config");
+    const res = await apiFetch("/api/config");
     const data = await res.json();
     if (data.success) {
       if (data.authorized_chat_id) {
@@ -332,7 +497,7 @@ async function loadConfig() {
 
 async function deployKey(keyId) {
   try {
-    const res = await fetch("/api/deploy_key", {
+    const res = await apiFetch("/api/deploy_key", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ key_string: keyId, target_node: appState.activeNode })
@@ -351,7 +516,7 @@ async function deployKey(keyId) {
 async function revokeKey(keyId) {
   if (!confirm(`Are you sure you want to revoke key ${keyId}?`)) return;
   try {
-    const res = await fetch("/api/revoke_key", {
+    const res = await apiFetch("/api/revoke_key", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ key_id: keyId, target_node: appState.activeNode })
@@ -373,7 +538,7 @@ async function revokeKey(keyId) {
 async function testAgentBot(agentName) {
   showToast(`Sending test ping from ${agentName}...`, "info");
   try {
-    const res = await fetch("/api/agent_bots/test", {
+    const res = await apiFetch("/api/agent_bots/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ agent_name: agentName, target_node: appState.activeNode })
@@ -391,7 +556,7 @@ async function testAgentBot(agentName) {
 
 async function deployAgentBot(agentName) {
   try {
-    const res = await fetch("/api/agent_bots/deploy", {
+    const res = await apiFetch("/api/agent_bots/deploy", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ agent_name: agentName, target_node: appState.activeNode })
@@ -431,7 +596,7 @@ function initForms() {
       btnConfirmImport.innerHTML = `<span>⏳</span> Verifying Key...`;
 
       try {
-        const res = await fetch("/api/create_key", {
+        const res = await apiFetch("/api/create_key", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -493,7 +658,7 @@ function initForms() {
         };
         if (adminKey) payload.admin_key = adminKey;
 
-        const res = await fetch("/api/create_key", {
+        const res = await apiFetch("/api/create_key", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
@@ -532,7 +697,7 @@ function initForms() {
     }
 
     try {
-      const res = await fetch("/api/agent_bots/register", {
+      const res = await apiFetch("/api/agent_bots/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agent_name: agent, bot_token: token, config_path: configPath, notes: notes, target_node: appState.activeNode })
@@ -562,7 +727,7 @@ function initForms() {
     }
 
     try {
-      const res = await fetch("/api/agent_bots/register", {
+      const res = await apiFetch("/api/agent_bots/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agent_name: agent, bot_token: token, target_node: appState.activeNode })
@@ -590,7 +755,7 @@ function initForms() {
     if (infKey) payload.inference_key = infKey;
 
     try {
-      const res = await fetch("/api/config", {
+      const res = await apiFetch("/api/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -611,7 +776,7 @@ function initForms() {
   document.getElementById("btn-save-tg-settings").addEventListener("click", async () => {
     const chatId = document.getElementById("cfg-chat-id").value.trim();
     try {
-      const res = await fetch("/api/config", {
+      const res = await apiFetch("/api/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ authorized_chat_id: chatId })
@@ -642,7 +807,7 @@ function initForms() {
       btnSaveBannerAdmin.innerHTML = `<span>⏳</span> Saving...`;
 
       try {
-        const res = await fetch("/api/config", {
+        const res = await apiFetch("/api/config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ admin_key: key })
@@ -716,7 +881,7 @@ async function runInference() {
   reasoningBox.classList.add("hidden");
 
   try {
-    const res = await fetch("/api/infer", {
+    const res = await apiFetch("/api/infer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -807,7 +972,7 @@ async function loadFleetNodes() {
   const selNode = document.getElementById("select-active-node");
 
   try {
-    const res = await fetch("/api/fleet/nodes?probe=1");
+    const res = await apiFetch("/api/fleet/nodes?probe=1");
     const data = await res.json();
     if (data.success && data.nodes) {
       appState.fleetNodes = data.nodes;
@@ -893,7 +1058,7 @@ async function syncNodeGit(target) {
   }
 
   try {
-    const res = await fetch("/api/fleet/sync", {
+    const res = await apiFetch("/api/fleet/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node: target })
@@ -934,7 +1099,7 @@ async function handleRegisterNode() {
   }
 
   try {
-    const res = await fetch("/api/fleet/register_node", {
+    const res = await apiFetch("/api/fleet/register_node", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: name, base_url: url, label: label })
@@ -959,7 +1124,7 @@ async function removeFleetNode(name) {
   if (!confirm(`Are you sure you want to remove node "${name}" from your fleet mesh?`)) return;
 
   try {
-    const res = await fetch("/api/fleet/remove_node", {
+    const res = await apiFetch("/api/fleet/remove_node", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: name })
@@ -973,6 +1138,264 @@ async function removeFleetNode(name) {
       loadFleetNodes();
     } else {
       showToast(`Failed to remove node`, "error");
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, "error");
+  }
+}
+
+// --- Node Pairing & Guest Validation & Subkeys ---
+
+function initPairingAndSubkeys() {
+  const btnTogglePair = document.getElementById("btn-toggle-pair");
+  if (btnTogglePair) btnTogglePair.addEventListener("click", handlePairToggle);
+
+  const btnOpenPair = document.getElementById("btn-open-pair-modal");
+  if (btnOpenPair) btnOpenPair.addEventListener("click", () => openModal("modal-pair-code"));
+
+  const btnSubmitPair = document.getElementById("btn-submit-pair-code");
+  if (btnSubmitPair) btnSubmitPair.addEventListener("click", handlePairCodeSubmit);
+
+  const inputPair = document.getElementById("input-pair-code");
+  if (inputPair) {
+    inputPair.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") handlePairCodeSubmit();
+    });
+  }
+
+  const btnGuestVal = document.getElementById("btn-guest-validate-key");
+  if (btnGuestVal) btnGuestVal.addEventListener("click", handleGuestValidateKey);
+
+  const inputGuest = document.getElementById("input-guest-key");
+  if (inputGuest) {
+    inputGuest.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") handleGuestValidateKey();
+    });
+  }
+
+  const btnConfirmSubkey = document.getElementById("btn-confirm-create-subkey");
+  if (btnConfirmSubkey) btnConfirmSubkey.addEventListener("click", handleCreateSubkey);
+}
+
+function handlePairToggle() {
+  if (appState.authenticated) {
+    if (confirm("Do you want to unpair this browser session? Machine management will be locked.")) {
+      sessionStorage.removeItem("venice_pairing_code");
+      appState.authenticated = false;
+      updatePairingUI(false);
+      showToast("Machine session unpaired. Access locked to guest mode.", "info");
+      refreshAll();
+    }
+  } else {
+    openModal("modal-pair-code");
+  }
+}
+
+async function handlePairCodeSubmit() {
+  const input = document.getElementById("input-pair-code");
+  const errDiv = document.getElementById("pair-code-error");
+  const code = input.value.trim();
+  if (!code) {
+    errDiv.innerText = "Please enter a pairing code.";
+    errDiv.style.display = "block";
+    return;
+  }
+
+  errDiv.style.display = "none";
+  const btn = document.getElementById("btn-submit-pair-code");
+  btn.disabled = true;
+  btn.innerHTML = `<span>⏳</span> Verifying...`;
+
+  try {
+    const res = await fetch("/api/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: code })
+    });
+    const data = await res.json();
+    if (data.success && data.authenticated) {
+      sessionStorage.setItem("venice_pairing_code", code);
+      appState.authenticated = true;
+      closeModal("modal-pair-code");
+      input.value = "";
+      updatePairingUI(true);
+      showToast("Machine paired successfully! Full access unlocked.");
+      refreshAll();
+    } else {
+      errDiv.innerText = data.error || "Invalid pairing code. Please check and try again.";
+      errDiv.style.display = "block";
+    }
+  } catch (err) {
+    errDiv.innerText = `Network error: ${err.message}`;
+    errDiv.style.display = "block";
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = `<span>🔓</span> Authenticate & Unlock`;
+  }
+}
+
+async function handleGuestValidateKey() {
+  const input = document.getElementById("input-guest-key");
+  const resultDiv = document.getElementById("guest-validate-result");
+  const key = input.value.trim();
+  if (!key) {
+    showToast("Please enter a Venice API key to validate", "error");
+    input.focus();
+    return;
+  }
+
+  const btn = document.getElementById("btn-guest-validate-key");
+  btn.disabled = true;
+  btn.innerHTML = `<span>⏳</span> Testing Key...`;
+  resultDiv.style.display = "block";
+  resultDiv.innerHTML = `<div class="text-muted" style="padding: 10px;">Validating key and checking balances with Venice.ai...</div>`;
+
+  try {
+    const res = await fetch("/api/validate_key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: key })
+    });
+    const data = await res.json();
+    if (data.success && data.valid) {
+      const balances = data.balances || {};
+      const usd = balances.USD !== undefined ? Number(balances.USD).toFixed(2) : "0.00";
+      const diem = balances.DIEM !== undefined ? Number(balances.DIEM).toFixed(2) : "0.00";
+      const bundled = balances.BUNDLED_CREDITS || 0;
+      const tier = (data.tier || "s").toUpperCase();
+      const latency = data.latency_ms || "--";
+      const masked = data.masked_key || (key.substring(0, 8) + "..." + key.substring(key.length - 4));
+
+      resultDiv.innerHTML = `
+        <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: var(--radius-md); padding: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="badge badge-green">VALID KEY</span>
+              <span class="badge badge-purple">TIER: ${escapeHtml(tier)}</span>
+              <span class="text-mono" style="font-size: 12px; color: var(--text-main); font-weight: 600;">${escapeHtml(masked)}</span>
+            </div>
+            <div class="text-dim text-mono" style="font-size: 11px;">Ping: ${latency} ms</div>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 10px;">
+            <div style="background: var(--bg-card); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+              <div class="text-dim" style="font-size: 11px;">USD BALANCE</div>
+              <div style="font-size: 16px; font-weight: 700; color: #10b981;">$${usd}</div>
+            </div>
+            <div style="background: var(--bg-card); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+              <div class="text-dim" style="font-size: 11px;">DIEM BALANCE</div>
+              <div style="font-size: 16px; font-weight: 700; color: #a855f7;">${diem} DIEM</div>
+            </div>
+            <div style="background: var(--bg-card); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+              <div class="text-dim" style="font-size: 11px;">BUNDLED CREDITS</div>
+              <div style="font-size: 16px; font-weight: 700; color: #06b6d4;">${bundled}</div>
+            </div>
+          </div>
+          <p style="font-size: 12px; color: var(--text-muted); margin: 0;">
+            ✅ Key verified and responsive! To assign this key to autonomous agents or mint sub-keys, unlock this node above using your pairing code.
+          </p>
+        </div>
+      `;
+    } else {
+      resultDiv.innerHTML = `
+        <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: var(--radius-md); padding: 12px;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+            <span class="badge badge-danger">INVALID KEY</span>
+            <span style="font-size: 12px; color: var(--accent-red); font-weight: 600;">${escapeHtml(data.error || 'Failed to authenticate key with Venice API')}</span>
+          </div>
+          <div class="text-dim" style="font-size: 11px;">Check that your key is active and formatted correctly.</div>
+        </div>
+      `;
+    }
+  } catch (err) {
+    resultDiv.innerHTML = `
+      <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: var(--radius-md); padding: 12px;">
+        <span class="badge badge-danger">ERROR</span>
+        <span style="font-size: 12px; color: var(--accent-red); margin-left: 8px;">Network error: ${escapeHtml(err.message)}</span>
+      </div>
+    `;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = `<span>⚡</span> Test & Validate Key`;
+  }
+}
+
+async function handleCreateSubkey() {
+  const labelInput = document.getElementById("subkey-label");
+  const tierInput = document.getElementById("subkey-quality-tier");
+  const budgetInput = document.getElementById("subkey-budget");
+  const periodInput = document.getElementById("subkey-period");
+  const agentInput = document.getElementById("subkey-target-agent");
+  const nodeInput = document.getElementById("subkey-target-node");
+
+  const label = labelInput.value.trim();
+  if (!label) {
+    showToast("Please enter a label for the sub-key", "error");
+    labelInput.focus();
+    return;
+  }
+
+  const budget = parseFloat(budgetInput.value) || 0.25;
+  const tier = tierInput.value || "s";
+  const period = periodInput.value || "DAY";
+  const targetAgent = agentInput.value || null;
+  const targetNode = nodeInput.value || "local";
+
+  const btn = document.getElementById("btn-confirm-create-subkey");
+  btn.disabled = true;
+  btn.innerHTML = `<span>⏳</span> Minting...`;
+
+  try {
+    const res = await apiFetch("/api/subkeys/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        label: label,
+        budget_usd: budget,
+        quality_tier: tier,
+        period: period,
+        target_agent: targetAgent,
+        target_node: targetNode
+      })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`Sub-key "${label}" minted successfully! (Tier: ${tier.toUpperCase()}, Budget: $${budget})`);
+      closeModal("modal-create-subkey");
+      labelInput.value = "";
+      budgetInput.value = "0.25";
+      loadSubkeys();
+      loadKeys();
+    } else {
+      showToast(`Failed to mint sub-key: ${data.error}`, "error");
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, "error");
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = `<span>⚡</span> Mint & Deploy Sub-Key`;
+  }
+}
+
+async function promptApplySubkey(subkeyId) {
+  const agent = prompt("Enter agent name to deploy sub-key to (e.g. hermes-music, a2a-node, dawagent, worker-audio):", "hermes-music");
+  if (!agent) return;
+
+  try {
+    const res = await apiFetch("/api/subkeys/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        subkey_id: subkeyId,
+        agent_name: agent.trim(),
+        target_node: appState.activeNode
+      })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`Sub-key deployed to agent "${agent}" on ${data.target_node}!`);
+      loadSubkeys();
+    } else {
+      showToast(`Deploy failed: ${data.error}`, "error");
     }
   } catch (err) {
     showToast(`Error: ${err.message}`, "error");

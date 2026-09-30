@@ -323,7 +323,7 @@ cd venice-key-manager
 ```
 
 #### 2. Initialize Node-Local Vault
-Create or update `venice_vault.json` with that machine's Venice API keys:
+Create or update `venice_vault.json` with that machine's node-local configuration:
 ```json
 {
   "venice": {
@@ -331,12 +331,36 @@ Create or update `venice_vault.json` with that machine's Venice API keys:
     "inference_key": "YOUR_NODE_LOCAL_INFERENCE_KEY",
     "base_url": "https://api.venice.ai/api/v1"
   },
+  "security": {
+    "pairing_code": "VK-YOUR-SECRET-CODE",
+    "require_pairing": true
+  },
+  "cloudflare": {
+    "domain": "",
+    "tunnel_token": ""
+  },
   "telegram": {
     "authorized_chat_id": "8293122782"
   },
-  "keys": []
+  "keys": [],
+  "subkeys": []
 }
 ```
+
+### 🔒 Dual-Mode Security Gate & Guest Key Validator
+Every machine running Venice Key Manager features a dual-mode access security gate:
+
+1. **Unauthenticated / Guest Mode**:
+   - Visitors connecting without pairing can use the **Key Ingestion & Sandbox Validator** (`POST /api/validate_key`).
+   - The node safely checks the key against Venice.ai's live balances and runs a 15-token inference latency test (`deepseek-v4-flash`).
+   - Returns valid status, live USD balance, DIEM token balance, and model tier without exposing the host's vault, agent configs, or mesh nodes.
+   - Any attempt to access vault keys, agent bots, or fleet settings returns `HTTP 401 Unauthorized` with `{"requires_pairing": true}`.
+
+2. **Authenticated / Paired Mode**:
+   - Node administrators unlock the dashboard by entering their node's secure **Pairing Code** (`VK-XXXXXXXX`).
+   - Telegram bot command `/pair_code` displays the current pairing code directly in the authorized Telegram chat.
+   - Authenticated sessions can issue keys, mint budget-capped sub-keys ($0.25 default), and auto-deploy to agents (`hermes-music`, `a2a-node`, `dawagent`, `worker-audio`).
+
 
 #### 3. Start the Service Daemon
 

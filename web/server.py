@@ -24,6 +24,7 @@ from core.tg_manager import TelegramAgentManager
 from core.deployer import ConfigDeployer
 from core.tiers import MODEL_TIER_ORDER, MODEL_TIER_MAPPING, is_tier_allowed, resolve_model_tier, get_model_for_tier
 from core.mesh import FleetMeshManager
+from core.tunnel import CloudflareTunnelManager
 
 logger = logging.getLogger("venice_web")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -33,6 +34,7 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
     vault = KeyVault()
     tg_manager = TelegramAgentManager(vault)
     mesh = FleetMeshManager(vault)
+    tunnel = CloudflareTunnelManager(vault)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
@@ -51,7 +53,7 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Pairing-Code, Authorization")
         self.end_headers()
         self.wfile.write(body)
 
@@ -59,7 +61,7 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Pairing-Code, Authorization")
         self.end_headers()
 
     def _read_json_body(self) -> Dict[str, Any]:
@@ -68,6 +70,30 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             raw = self.rfile.read(length).decode("utf-8")
             return json.loads(raw)
         return {}
+
+    def _is_authenticated(self, query: Dict[str, str], body: Optional[Dict[str, Any]] = None) -> bool:
+        if not self.vault.is_pairing_required():
+            return True
+        header_code = self.headers.get("X-Pairing-Code", "").strip()
+        if header_code and self.vault.verify_pairing_code(header_code):
+            return True
+        auth_hdr = self.headers.get("Authorization", "").strip()
+        if auth_hdr.startswith("Bearer "):
+            bearer_code = auth_hdr[7:].strip()
+            if self.vault.verify_pairing_code(bearer_code):
+                return True
+        q_val = query.get("pairing_code", "")
+        if isinstance(q_val, list):
+            query_code = q_val[0].strip() if q_val else ""
+        else:
+            query_code = str(q_val).strip()
+        if query_code and self.vault.verify_pairing_code(query_code):
+            return True
+        if body:
+            b_code = body.get("pairing_code") or body.get("code")
+            if b_code and self.vault.verify_pairing_code(str(b_code).strip()):
+                return True
+        return False
 
     def do_GET(self):
         client = self._get_venice_client()
@@ -88,14 +114,51 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             self._send_json(res)
             return
 
+        # 1. Public Endpoints (Accessible without pairing code)
         if path == "/api/version":
             self._send_json(self.mesh.get_version_info())
+            return
 
-        elif path == "/api/fleet/nodes":
+        elif path == "/api/pairing_status":
+            is_paired = self._is_authenticated(query)
+            self._send_json({
+                "success": True,
+                "authenticated": is_paired,
+                "paired": is_paired,
+                "requires_pairing": self.vault.is_pairing_required(),
+                "require_pairing": self.vault.is_pairing_required(),
+                "domain": self.tunnel.get_configured_domain(),
+                "configured_domain": self.tunnel.get_configured_domain(),
+                "tunnel": self.tunnel.get_status()
+            })
+            return
+
+        elif path == "/api/tunnel/status":
+            self._send_json(self.tunnel.get_status())
+            return
+
+        # 2. Pairing Gate for all other /api/* endpoints
+        if path.startswith("/api/"):
+            if not self._is_authenticated(query):
+                self._send_json({
+                    "success": False,
+                    "requires_pairing": True,
+                    "error": "This machine is in Protected Mode. Please enter the secure pairing code to unlock."
+                }, status=401)
+                return
+
+        # 3. Privileged Endpoints (Require valid pairing code)
+        if path == "/api/fleet/nodes":
             probe = query.get("probe") in ("1", "true")
             self._send_json({
                 "success": True,
                 "nodes": self.mesh.list_nodes(check_health=probe)
+            })
+
+        elif path == "/api/subkeys":
+            self._send_json({
+                "success": True,
+                "subkeys": self.vault.get_subkeys()
             })
 
         elif path == "/api/stats":
@@ -183,7 +246,14 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         client = self._get_venice_client()
         body = self._read_json_body()
-        path = self.path.split("?")[0]
+        raw_path = self.path
+        path = raw_path.split("?")[0]
+        query = {}
+        if "?" in raw_path:
+            for part in raw_path.split("?")[1].split("&"):
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    query[k] = v
 
         # Peer node forwarding for POST requests
         target_node = body.get("target_node")
@@ -192,7 +262,173 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             self._send_json(res)
             return
 
-        if path == "/api/fleet/sync":
+        # 1. Public Endpoints (Accessible without pairing code)
+        if path == "/api/pair":
+            code = (body.get("code") or body.get("pairing_code") or "").strip()
+            if not code:
+                self._send_json({"success": False, "authenticated": False, "paired": False, "error": "Missing pairing code."}, status=400)
+                return
+            if self.vault.verify_pairing_code(code):
+                self._send_json({
+                    "success": True,
+                    "authenticated": True,
+                    "paired": True,
+                    "pairing_code": code,
+                    "message": "Secure code verified. Machine paired successfully!"
+                })
+            else:
+                self._send_json({
+                    "success": False,
+                    "authenticated": False,
+                    "paired": False,
+                    "error": "Invalid pairing code. Please enter the correct code configured on this machine."
+                }, status=401)
+            return
+
+        elif path == "/api/validate_key":
+            api_key = (body.get("api_key") or body.get("key") or body.get("key_string") or "").strip()
+            if not api_key:
+                self._send_json({"success": False, "valid": False, "error": "API Key cannot be empty."}, status=400)
+                return
+
+            # Test against Venice rate limits endpoint
+            rate_res = client.get_rate_limits(key=api_key)
+            if not rate_res.get("success"):
+                err_msg = rate_res.get("error", "Key verification failed")
+                if rate_res.get("status_code") == 401:
+                    err_msg = "Venice rejected this API key (401 Unauthorized). Please check your key string."
+                self._send_json({
+                    "success": False,
+                    "valid": False,
+                    "error": err_msg,
+                    "status_code": rate_res.get("status_code", 401)
+                }, status=200)
+                return
+
+            raw = rate_res.get("raw", {})
+            balances = rate_res.get("balances", {})
+            tier = rate_res.get("apiTier", {})
+            next_epoch = rate_res.get("nextEpochBegins")
+
+            # Small verification test prompt against Venice live
+            small_test = client.test_inference(
+                prompt="Ping from Venice Validator.",
+                model="deepseek-v4-flash",
+                max_tokens=15,
+                key=api_key
+            )
+            test_passed = small_test.get("success", False)
+            masked = f"{api_key[:6]}...{api_key[-4:]}" if len(api_key) > 10 else "***"
+
+            self._send_json({
+                "success": True,
+                "valid": True,
+                "masked_key": masked,
+                "balances": balances,
+                "apiTier": tier,
+                "nextEpochBegins": next_epoch,
+                "small_test_passed": test_passed,
+                "latency_ms": small_test.get("latency_ms", 0),
+                "message": f"Valid Venice Key! Live balance: ${balances.get('USD', 0):.2f} USD ({balances.get('DIEM', 0):.2f} DIEM)."
+            })
+            return
+
+        # 2. Pairing Gate for all other /api/* POST endpoints
+        if path.startswith("/api/"):
+            if not self._is_authenticated(query, body):
+                self._send_json({
+                    "success": False,
+                    "requires_pairing": True,
+                    "error": "This machine is in Protected Mode. Please enter the secure pairing code to unlock."
+                }, status=401)
+                return
+
+        # 3. Privileged Endpoints
+        if path == "/api/subkeys/create":
+            parent_key_id = body.get("parent_key_id", "")
+            name = (body.get("name") or body.get("label") or "Sub-Key Agent").strip()
+            budget = float(body.get("budget_usd", 0.25))
+            period = (body.get("limit_period") or body.get("period") or "DAY").upper()
+            max_tier = (body.get("max_model_tier") or body.get("quality_tier") or "s").lower().strip()
+            target_agent = (body.get("target_agent") or body.get("assigned_agent") or "").strip()
+
+            parent_key = None
+            if parent_key_id:
+                parent_key = next((k for k in self.vault.get_venice_keys() if k.get("id") == parent_key_id), None)
+            if not parent_key and self.vault.get_venice_keys():
+                parent_key = self.vault.get_venice_keys()[0]
+
+            import secrets
+            sk_id = f"vsk_{secrets.token_hex(5)}"
+            raw_key_val = parent_key.get("apiKey") if parent_key else self.vault.get_active_venice_key()
+
+            subkey_entry = {
+                "id": sk_id,
+                "name": name,
+                "label": name,
+                "apiKey": raw_key_val,
+                "parent_key_id": parent_key.get("id") if parent_key else "vault_default",
+                "budget_usd": budget,
+                "limit_period": period,
+                "period": period,
+                "maxModelTier": max_tier,
+                "quality_tier": max_tier,
+                "target_agent": target_agent,
+                "assigned_agent": target_agent,
+                "assigned_node": body.get("target_node") or body.get("assigned_node") or "local",
+                "created_at": datetime.utcnow().isoformat() + "Z",
+                "status": "ACTIVE"
+            }
+            self.vault.store_subkey(subkey_entry)
+
+            deployed_to = None
+            if target_agent:
+                dep_res = ConfigDeployer.deploy_venice_key(raw_key_val, agent_name=target_agent)
+                if dep_res.get("success"):
+                    deployed_to = dep_res.get("target")
+
+            self._send_json({
+                "success": True,
+                "subkey": subkey_entry,
+                "deployed_to": deployed_to,
+                "message": f"Sub-key '{name}' provisioned with ${budget:.2f}/{period.lower()} cap."
+            })
+
+        elif path == "/api/subkeys/apply":
+            key_val = body.get("key_string") or body.get("api_key")
+            subkey_id = body.get("subkey_id")
+            agent_name = body.get("agent_name", "hermes-music")
+            target_path = body.get("target_path")
+
+            if not key_val and subkey_id:
+                subkeys = self.vault.get_subkeys()
+                sk = next((s for s in subkeys if s.get("id") == subkey_id), None)
+                if sk:
+                    key_val = sk.get("apiKey")
+
+            if not key_val:
+                key_val = self.vault.get_active_venice_key()
+
+            dep_res = ConfigDeployer.deploy_venice_key(
+                key_val,
+                target_path=Path(target_path) if target_path else None,
+                agent_name=agent_name
+            )
+            if dep_res.get("success") and subkey_id:
+                for s in self.vault.get_subkeys():
+                    if s.get("id") == subkey_id:
+                        s["target_agent"] = agent_name
+                        s["deployed_at"] = datetime.utcnow().isoformat() + "Z"
+                        self.vault.store_subkey(s)
+                        break
+            self._send_json(dep_res)
+
+        elif path == "/api/tunnel/start":
+            port = int(body.get("port", 8844))
+            res = self.tunnel.start_tunnel(local_port=port)
+            self._send_json(res)
+
+        elif path == "/api/fleet/sync":
             node = body.get("node", "local")
             if node == "all":
                 res = self.mesh.sync_all_nodes()

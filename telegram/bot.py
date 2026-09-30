@@ -123,6 +123,10 @@ class VeniceTelegramBot:
                     {"text": "📥 Sync Fleet Git", "callback_data": "act_sync_fleet"}
                 ],
                 [
+                    {"text": "🔒 Pairing Code", "callback_data": "menu_pair_code"},
+                    {"text": "🎟️ Agent Sub-Keys", "callback_data": "menu_subkeys"}
+                ],
+                [
                     {"text": "📊 Model Limits", "callback_data": "menu_limits"},
                     {"text": "🔄 Refresh Dashboard", "callback_data": "menu_main"}
                 ]
@@ -650,6 +654,37 @@ class VeniceTelegramBot:
                 txt = f"📥 *Git Sync for {target}*:\n\n{st} {c_after}\n{r.get('message', '')}"
             self.edit_message(chat_id, msg_id, txt, reply_markup=self.back_to_main_keyboard())
 
+        elif data == "menu_pair_code":
+            self.answer_callback(cb_id)
+            code = self.vault.get_pairing_code()
+            cf_conf = self.vault.get_cloudflare_config()
+            domain = cf_conf.get("domain", "local")
+            txt = (
+                f"🔒 *Machine Secure Pairing Code*\n\n"
+                f"• *Node*: `Local Host`\n"
+                f"• *Pairing Code*: `{code}`\n"
+                f"• *Public Access*: `{domain}`\n\n"
+                f"Use this pairing code on the web interface to unlock full key management, vault operations, and agent deployment."
+            )
+            self.edit_message(chat_id, msg_id, txt, reply_markup=self.back_to_main_keyboard())
+
+        elif data == "menu_subkeys":
+            self.answer_callback(cb_id)
+            subkeys = self.vault.get_subkeys()
+            if subkeys:
+                txt = f"🎟️ *Agent Sub-Keys ({len(subkeys)})*:\n\n"
+                for sk in subkeys[:8]:
+                    lbl = sk.get("label", "Sub-Key")
+                    tier = (sk.get("quality_tier") or "s").upper()
+                    b = sk.get("budget_usd", 0.25)
+                    per = sk.get("period", "DAY")
+                    ag = sk.get("assigned_agent") or "Unassigned"
+                    nd = sk.get("assigned_node") or "local"
+                    txt += f"• *{lbl}* `[TIER: {tier}]` Cap: `${b:.2f}/{per}`\n  Agent: `{ag}` ({nd}) | ID: `{sk.get('id')}`\n"
+            else:
+                txt = "🎟️ *Agent Sub-Keys*\n\nNo sub-keys minted yet. Mint them via Web UI or MCP server."
+            self.edit_message(chat_id, msg_id, txt, reply_markup=self.back_to_main_keyboard())
+
     # --- Message Command Handlers ---
 
     def handle_message(self, msg: Dict[str, Any]):
@@ -663,6 +698,44 @@ class VeniceTelegramBot:
 
         if text.startswith("/start") or text.startswith("/menu"):
             self.send_message(chat_id, self.render_dashboard_text(), reply_markup=self.main_menu_keyboard())
+
+        elif text.startswith("/pair_code"):
+            code = self.vault.get_pairing_code()
+            cf_conf = self.vault.get_cloudflare_config()
+            domain = cf_conf.get("domain", "local")
+            self.send_message(
+                chat_id,
+                f"🔒 *Machine Pairing Code*\n\n"
+                f"• *Node*: `Local Host`\n"
+                f"• *Pairing Code*: `{code}`\n"
+                f"• *Public Access*: `{domain}`\n\n"
+                f"Enter this code on the web dashboard to unlock full fleet management and agent deployment."
+            )
+
+        elif text.startswith("/rotate_pair_code"):
+            new_code = self.vault.generate_new_pairing_code()
+            self.send_message(
+                chat_id,
+                f"🔄 *New Pairing Code Generated!*\n\n"
+                f"• *New Code*: `{new_code}`\n\n"
+                f"Previous sessions have been invalidated. Use this code to pair your browser."
+            )
+
+        elif text.startswith("/subkeys"):
+            subkeys = self.vault.get_subkeys()
+            if subkeys:
+                txt = f"🎟️ *Agent Sub-Keys ({len(subkeys)})*:\n\n"
+                for sk in subkeys[:10]:
+                    lbl = sk.get("label", "Sub-Key")
+                    tier = (sk.get("quality_tier") or "s").upper()
+                    b = sk.get("budget_usd", 0.25)
+                    per = sk.get("period", "DAY")
+                    ag = sk.get("assigned_agent") or "Unassigned"
+                    nd = sk.get("assigned_node") or "local"
+                    txt += f"• *{lbl}* `[TIER: {tier}]` Cap: `${b:.2f}/{per}`\n  Agent: `{ag}` ({nd}) | ID: `{sk.get('id')}`\n"
+            else:
+                txt = "🎟️ *Agent Sub-Keys*: No sub-keys currently recorded."
+            self.send_message(chat_id, txt)
 
         elif text.startswith("/balance"):
             client = self._get_venice_client()

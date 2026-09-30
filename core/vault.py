@@ -195,3 +195,84 @@ class KeyVault:
             "tg_token_field": tg_field
         }
         self._save()
+
+    # --- Security & Secure Pairing Code ---
+
+    def get_pairing_code(self) -> str:
+        """Returns the active pairing code, generating one if not set."""
+        env_code = os.environ.get("SECURE_PAIRING_CODE")
+        if env_code:
+            return env_code.strip()
+        sec = self.data.setdefault("security", {})
+        code = sec.get("pairing_code")
+        if not code:
+            import secrets
+            code = f"VK-{secrets.token_hex(4).upper()}"
+            sec["pairing_code"] = code
+            sec.setdefault("require_pairing", True)
+            self._save()
+        return code
+
+    def set_pairing_code(self, code: str) -> None:
+        sec = self.data.setdefault("security", {})
+        sec["pairing_code"] = code.strip()
+        sec.setdefault("require_pairing", True)
+        self._save()
+
+    def verify_pairing_code(self, candidate: str) -> bool:
+        """Verifies candidate pairing code using constant-time comparison."""
+        import hmac
+        if not candidate:
+            return False
+        expected = self.get_pairing_code()
+        return hmac.compare_digest(candidate.strip(), expected)
+
+    def is_pairing_required(self) -> bool:
+        return self.data.get("security", {}).get("require_pairing", True)
+
+    # --- Cloudflare DNS & Tunnel Config ---
+
+    def get_cloudflare_config(self) -> Dict[str, Any]:
+        return self.data.get("cloudflare", {
+            "domain": os.environ.get("CLOUDFLARE_DOMAIN", ""),
+            "tunnel_name": os.environ.get("CLOUDFLARE_TUNNEL_NAME", "venice-tunnel"),
+            "tunnel_token": os.environ.get("CLOUDFLARE_TUNNEL_TOKEN", "")
+        })
+
+    def set_cloudflare_config(self, domain: str, tunnel_name: str = "", tunnel_token: str = "") -> None:
+        cf = self.data.setdefault("cloudflare", {})
+        if domain:
+            cf["domain"] = domain.strip()
+        if tunnel_name:
+            cf["tunnel_name"] = tunnel_name.strip()
+        if tunnel_token:
+            cf["tunnel_token"] = tunnel_token.strip()
+        self._save()
+
+    # --- Delegated Sub-Keys ---
+
+    def get_subkeys(self) -> List[Dict[str, Any]]:
+        return self.data.get("subkeys", [])
+
+    def store_subkey(self, subkey_info: Dict[str, Any]) -> None:
+        subkeys = self.data.setdefault("subkeys", [])
+        sk_id = subkey_info.get("id")
+        updated = False
+        for i, sk in enumerate(subkeys):
+            if sk.get("id") == sk_id:
+                subkeys[i] = subkey_info
+                updated = True
+                break
+        if not updated:
+            subkeys.insert(0, subkey_info)
+        self._save()
+
+    def remove_subkey(self, subkey_id: str) -> bool:
+        subkeys = self.data.setdefault("subkeys", [])
+        initial_len = len(subkeys)
+        self.data["subkeys"] = [s for s in subkeys if s.get("id") != subkey_id]
+        if len(self.data["subkeys"]) < initial_len:
+            self._save()
+            return True
+        return False
+
