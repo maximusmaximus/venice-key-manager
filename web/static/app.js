@@ -47,25 +47,80 @@ function initTabs() {
 
 // Modals
 function initModals() {
-  document.getElementById("btn-open-create-key").addEventListener("click", () => {
-    openModal("modal-create-key");
-  });
+  const btnOpenCreate = document.getElementById("btn-open-create-key");
+  if (btnOpenCreate) {
+    btnOpenCreate.addEventListener("click", () => {
+      openModal("modal-create-key");
+    });
+  }
 
-  document.getElementById("btn-add-agent-bot").addEventListener("click", () => {
-    openModal("modal-add-bot");
-  });
+  const btnAddBot = document.getElementById("btn-add-agent-bot");
+  if (btnAddBot) {
+    btnAddBot.addEventListener("click", () => {
+      openModal("modal-add-bot");
+    });
+  }
 
-  document.getElementById("btn-botfather-wizard").addEventListener("click", () => {
-    openModal("modal-botfather-wizard");
-  });
+  const btnWizard = document.getElementById("btn-botfather-wizard");
+  if (btnWizard) {
+    btnWizard.addEventListener("click", () => {
+      openModal("modal-botfather-wizard");
+    });
+  }
+
+  // Modal sub-tabs (Import vs Generate)
+  const tabImport = document.getElementById("tab-btn-import-key");
+  const tabGenerate = document.getElementById("tab-btn-generate-key");
+  const secImport = document.getElementById("section-import-key");
+  const secGenerate = document.getElementById("section-generate-key");
+
+  if (tabImport && tabGenerate) {
+    tabImport.addEventListener("click", () => {
+      tabImport.classList.add("active");
+      tabGenerate.classList.remove("active");
+      if (secImport) secImport.style.display = "block";
+      if (secGenerate) secGenerate.style.display = "none";
+    });
+
+    tabGenerate.addEventListener("click", () => {
+      tabGenerate.classList.add("active");
+      tabImport.classList.remove("active");
+      if (secGenerate) secGenerate.style.display = "block";
+      if (secImport) secImport.style.display = "none";
+    });
+  }
 }
 
 function openModal(id) {
-  document.getElementById(id).classList.add("active");
+  const modal = document.getElementById(id);
+  if (!modal) return;
+  modal.classList.add("active");
+
+  if (id === "modal-create-key") {
+    const hasAdmin = Boolean(appState.stats && appState.stats.has_admin_key);
+    const banner = document.getElementById("modal-admin-required-banner");
+    const groupAdmin = document.getElementById("group-modal-admin-key");
+    const tabImport = document.getElementById("tab-btn-import-key");
+    const tabGenerate = document.getElementById("tab-btn-generate-key");
+    const secImport = document.getElementById("section-import-key");
+    const secGenerate = document.getElementById("section-generate-key");
+
+    if (banner) banner.style.display = hasAdmin ? "none" : "flex";
+    if (groupAdmin) groupAdmin.style.display = hasAdmin ? "none" : "block";
+
+    // If no admin key, default to import tab
+    if (!hasAdmin && tabImport && tabGenerate) {
+      tabImport.classList.add("active");
+      tabGenerate.classList.remove("active");
+      if (secImport) secImport.style.display = "block";
+      if (secGenerate) secGenerate.style.display = "none";
+    }
+  }
 }
 
 function closeModal(id) {
-  document.getElementById(id).classList.remove("active");
+  const modal = document.getElementById(id);
+  if (modal) modal.classList.remove("active");
 }
 
 // Toast Notifications
@@ -140,7 +195,7 @@ async function loadKeys() {
     if (data.success && data.keys) {
       appState.keys = data.keys;
       if (data.keys.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">No API keys in local vault. Enter Admin Key in settings to list and issue remote keys.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted" style="padding: 24px;">No API keys stored in local vault. <button class="btn btn-sm btn-secondary" onclick="openModal('modal-create-key')" style="margin-left: 8px;">➕ Add / Import Key</button></td></tr>`;
         return;
       }
       tbody.innerHTML = data.keys.map(k => {
@@ -334,37 +389,106 @@ async function deployAgentBot(agentName) {
 // --- Forms & Inputs ---
 
 function initForms() {
-  // Confirm Issue Venice Key
-  document.getElementById("btn-confirm-create-key").addEventListener("click", async () => {
-    const desc = document.getElementById("new-key-desc").value.trim() || "Agent Key";
-    const kType = document.getElementById("new-key-type").value;
-    const limit = document.getElementById("new-key-limit").value;
-    const period = document.getElementById("new-key-period").value;
+  // Confirm Import Venice Key
+  const btnConfirmImport = document.getElementById("btn-confirm-import-key");
+  if (btnConfirmImport) {
+    btnConfirmImport.addEventListener("click", async () => {
+      const keyStr = document.getElementById("import-key-string").value.trim();
+      const desc = document.getElementById("import-key-desc").value.trim() || "Imported Key";
+      const kType = document.getElementById("import-key-type").value;
+      const limit = document.getElementById("import-key-limit").value;
 
-    try {
-      const res = await fetch("/api/create_key", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      if (!keyStr) {
+        showToast("Please enter or paste a Venice API key", "error");
+        document.getElementById("import-key-string").focus();
+        return;
+      }
+
+      btnConfirmImport.disabled = true;
+      btnConfirmImport.innerHTML = `<span>⏳</span> Verifying Key...`;
+
+      try {
+        const res = await fetch("/api/create_key", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: "import",
+            key_string: keyStr,
+            description: desc,
+            key_type: kType,
+            limit_usd: limit ? parseFloat(limit) : null
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`Key "${desc}" verified & added to vault!`);
+          closeModal("modal-create-key");
+          document.getElementById("import-key-string").value = "";
+          document.getElementById("import-key-desc").value = "";
+          document.getElementById("import-key-limit").value = "";
+          loadKeys();
+          loadStats();
+        } else {
+          showToast(`Import failed: ${data.error}`, "error");
+        }
+      } catch (err) {
+        showToast(`Network error: ${err.message}`, "error");
+      } finally {
+        btnConfirmImport.disabled = false;
+        btnConfirmImport.innerHTML = `<span>✅</span> Verify & Save Key`;
+      }
+    });
+  }
+
+  // Confirm Issue Venice Key (Remote Admin API)
+  const btnConfirmCreate = document.getElementById("btn-confirm-create-key");
+  if (btnConfirmCreate) {
+    btnConfirmCreate.addEventListener("click", async () => {
+      const desc = document.getElementById("new-key-desc").value.trim() || "Agent Key";
+      const kType = document.getElementById("new-key-type").value;
+      const limit = document.getElementById("new-key-limit").value;
+      const period = document.getElementById("new-key-period").value;
+      const adminKeyInput = document.getElementById("modal-admin-key-input");
+      const adminKey = adminKeyInput ? adminKeyInput.value.trim() : "";
+
+      btnConfirmCreate.disabled = true;
+      btnConfirmCreate.innerHTML = `<span>⏳</span> Generating via Venice...`;
+
+      try {
+        const payload = {
+          mode: "generate",
           description: desc,
           key_type: kType,
           limit_usd: limit ? parseFloat(limit) : null,
           limit_period: period
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        showToast("Venice key generated successfully!");
-        closeModal("modal-create-key");
-        loadKeys();
-        loadStats();
-      } else {
-        showToast(`Creation failed: ${data.error}`, "error");
+        };
+        if (adminKey) payload.admin_key = adminKey;
+
+        const res = await fetch("/api/create_key", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast("Venice key generated successfully!");
+          closeModal("modal-create-key");
+          document.getElementById("new-key-desc").value = "";
+          document.getElementById("new-key-limit").value = "";
+          if (adminKeyInput) adminKeyInput.value = "";
+          loadKeys();
+          loadStats();
+        } else {
+          showToast(`Creation failed: ${data.error}`, "error");
+        }
+      } catch (err) {
+        showToast(`Network error: ${err.message}`, "error");
+      } finally {
+        btnConfirmCreate.disabled = false;
+        btnConfirmCreate.innerHTML = `<span>⚡</span> Generate Key via Venice`;
       }
-    } catch (err) {
-      showToast(`Error: ${err.message}`, "error");
-    }
-  });
+    });
+  }
 
   // Confirm Register Agent Bot
   document.getElementById("btn-confirm-add-bot").addEventListener("click", async () => {

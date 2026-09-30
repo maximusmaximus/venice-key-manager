@@ -118,9 +118,9 @@
           <p class="panel-desc">Manage, issue, budget, and deploy programmatic Venice keys for agents and services.</p>
         </div>
         <div class="panel-actions">
-          <button class="btn btn-primary" id="btn-open-create-key">
+          <button class="btn btn-primary" id="btn-open-create-key" onclick="openModal('modal-create-key')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-            Issue New Key
+            Add / Issue Key
           </button>
         </div>
       </div>
@@ -308,40 +308,105 @@
     </main>
   </div>
 
-  <!-- Modal: Issue Venice Key -->
+  <!-- Modal: Add & Issue Venice Key -->
   <div class="modal-overlay" id="modal-create-key">
     <div class="modal card">
       <div class="modal-header">
-        <h3 class="modal-title">Issue New Venice Key</h3>
+        <h3 class="modal-title">🔑 Add & Issue Venice Key</h3>
         <button class="modal-close" onclick="closeModal('modal-create-key')">&times;</button>
       </div>
       <div class="modal-body">
-        <div class="form-group">
-          <label>Key Description / Label</label>
-          <input type="text" id="new-key-desc" class="input-field" placeholder="e.g. Worker-Audio-Agent">
+        <!-- Sub-tabs for Import vs Remote Generate -->
+        <div class="modal-tabs">
+          <button class="modal-tab-btn active" id="tab-btn-import-key" type="button">
+            <span>📥</span> Import Existing Key
+          </button>
+          <button class="modal-tab-btn" id="tab-btn-generate-key" type="button">
+            <span>⚡</span> Generate Remotely
+          </button>
         </div>
-        <div class="form-group">
-          <label>Key Type</label>
-          <select id="new-key-type" class="input-field">
-            <option value="INFERENCE" selected>INFERENCE (Standard Model Access)</option>
-            <option value="ADMIN">ADMIN (Full Account & Key Management)</option>
-          </select>
+
+        <!-- Section 1: Import Existing Key -->
+        <div id="section-import-key">
+          <div class="form-group">
+            <label>Venice API Key String <span class="text-danger">*</span></label>
+            <input type="password" id="import-key-string" class="input-field" placeholder="Paste your Venice API key..." autocomplete="off">
+            <span class="text-dim text-mono" style="font-size: 11px;">Supports both Inference and Admin keys from Venice.ai</span>
+          </div>
+          <div class="form-group">
+            <label>Key Description / Label</label>
+            <input type="text" id="import-key-desc" class="input-field" placeholder="e.g. Hermes Music Agent, Primary Node">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Key Type</label>
+              <select id="import-key-type" class="input-field">
+                <option value="INFERENCE" selected>INFERENCE (Model Access)</option>
+                <option value="ADMIN">ADMIN (Account Management)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Tracking Limit (USD)</label>
+              <input type="number" id="import-key-limit" class="input-field" placeholder="e.g. 5.0 (Optional)" step="0.5">
+            </div>
+          </div>
+          <div class="modal-footer" style="margin-top: 16px;">
+            <button class="btn btn-secondary" onclick="closeModal('modal-create-key')" type="button">Cancel</button>
+            <button class="btn btn-primary" id="btn-confirm-import-key" type="button">
+              <span>✅</span> Verify & Save Key
+            </button>
+          </div>
         </div>
-        <div class="form-group">
-          <label>Consumption Limit (USD)</label>
-          <input type="number" id="new-key-limit" class="input-field" placeholder="e.g. 5.0 (Optional)" step="0.5">
+
+        <!-- Section 2: Generate Remotely (Admin API) -->
+        <div id="section-generate-key" style="display: none;">
+          <!-- Warning banner if no admin key -->
+          <div id="modal-admin-required-banner" class="alert-banner" style="margin-bottom: 16px; display: none;">
+            <div class="alert-content">
+              <span class="alert-icon">⚠️</span>
+              <div class="alert-text">
+                <strong>Admin API Key Required</strong><br>
+                Venice requires an ADMIN key to issue keys via API. Enter your Admin Key below or switch to "Import Existing Key".
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group" id="group-modal-admin-key" style="display: none;">
+            <label>Venice Admin Key</label>
+            <input type="password" id="modal-admin-key-input" class="input-field" placeholder="Paste your Venice Admin Key here...">
+          </div>
+
+          <div class="form-group">
+            <label>Key Description / Label</label>
+            <input type="text" id="new-key-desc" class="input-field" placeholder="e.g. Worker-Audio-Agent">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Key Type</label>
+              <select id="new-key-type" class="input-field">
+                <option value="INFERENCE" selected>INFERENCE</option>
+                <option value="ADMIN">ADMIN</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Limit Period</label>
+              <select id="new-key-period" class="input-field">
+                <option value="MONTH" selected>Monthly Reset</option>
+                <option value="DAY">Daily Reset</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Consumption Limit (USD)</label>
+            <input type="number" id="new-key-limit" class="input-field" placeholder="e.g. 5.0 (Optional)" step="0.5">
+          </div>
+          <div class="modal-footer" style="margin-top: 16px;">
+            <button class="btn btn-secondary" onclick="closeModal('modal-create-key')" type="button">Cancel</button>
+            <button class="btn btn-primary" id="btn-confirm-create-key" type="button">
+              <span>⚡</span> Generate Key via Venice
+            </button>
+          </div>
         </div>
-        <div class="form-group">
-          <label>Limit Period</label>
-          <select id="new-key-period" class="input-field">
-            <option value="MONTH" selected>Monthly Reset</option>
-            <option value="DAY">Daily Reset</option>
-          </select>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="closeModal('modal-create-key')">Cancel</button>
-        <button class="btn btn-primary" id="btn-confirm-create-key">Generate Key</button>
       </div>
     </div>
   </div>

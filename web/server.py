@@ -6,7 +6,9 @@ Provides a multi-threaded HTTP server and REST API for real-time monitoring and 
 import sys
 import json
 import logging
+import hashlib
 import threading
+from datetime import datetime
 from pathlib import Path
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from typing import Dict, Any, Optional
@@ -148,18 +150,83 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
         body = self._read_json_body()
         path = self.path.split("?")[0]
 
-        if path == "/api/create_key":
+        if path in ("/api/create_key", "/api/keys/import"):
+            mode = body.get("mode")
+            key_str = body.get("key_string", "").strip()
             desc = body.get("description", "Agent Key")
-            k_type = body.get("key_type", "INFERENCE")
+            k_type = body.get("key_type", "INFERENCE").upper()
             limit = body.get("limit_usd")
             period = body.get("limit_period", "MONTH")
             expires = body.get("expires_at")
+            admin_key_param = body.get("admin_key", "").strip()
+
+            # Mode 1: Import existing key into vault
+            if mode == "import" or (key_str and mode != "generate"):
+                if not key_str:
+                    self._send_json({"success": False, "error": "API Key string cannot be empty"}, status=400)
+                    return
+
+                # Validate key against Venice live endpoint
+                rate_res = client.get_rate_limits(key=key_str)
+                if not rate_res.get("success"):
+                    err_msg = rate_res.get("error", "Key verification failed")
+                    if rate_res.get("status_code") == 401:
+                        err_msg = "Venice rejected this API key (401 Unauthorized). Verify the key is valid."
+                    self._send_json({"success": False, "error": err_msg, "status_code": rate_res.get("status_code", 400)})
+                    return
+
+                # Generate a stable key identifier
+                h = hashlib.sha256(key_str.encode()).hexdigest()[:10]
+                key_id = f"vk_{h}"
+
+                key_obj = {
+                    "id": key_id,
+                    "apiKey": key_str,
+                    "description": desc or "Imported Venice Key",
+                    "apiKeyType": k_type,
+                    "consumptionLimits": {"usd": float(limit)} if limit else {},
+                    "usage": {"trailingSevenDays": {"usd": 0.0}},
+                    "createdAt": datetime.utcnow().isoformat() + "Z",
+                    "status": "ACTIVE",
+                    "balances": rate_res.get("balances", {}),
+                    "apiTier": rate_res.get("apiTier", {})
+                }
+                self.vault.store_venice_key(key_obj)
+
+                # If imported key is marked ADMIN, update vault admin key
+                if k_type == "ADMIN":
+                    self.vault.set_venice_admin_key(key_str)
+                if not self.vault.get_venice_inference_key():
+                    self.vault.set_venice_inference_key(key_str)
+
+                self._send_json({
+                    "success": True,
+                    "imported": True,
+                    "key": key_obj,
+                    "message": "Key imported and verified successfully"
+                })
+                return
+
+            # Mode 2: Generate remotely via Venice Admin API
+            if admin_key_param:
+                self.vault.set_venice_admin_key(admin_key_param)
+
+            active_admin = self.vault.get_venice_admin_key()
+            if not active_admin:
+                self._send_json({
+                    "success": False,
+                    "error": "Venice Admin API Key is required to issue keys remotely. Enter your Admin Key or import an existing key.",
+                    "requires_admin": True
+                })
+                return
+
             res = client.create_key(
                 description=desc,
                 key_type=k_type,
-                limit_usd=limit,
+                limit_usd=float(limit) if limit else None,
                 limit_period=period,
-                expires_at=expires
+                expires_at=expires,
+                admin_key=active_admin
             )
             if res.get("success"):
                 key_obj = res.get("key", {})
@@ -167,15 +234,26 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             self._send_json(res)
 
         elif path == "/api/revoke_key":
-            key_id = body.get("key_id")
-            res = client.delete_key(key_id=key_id)
-            if res.get("success"):
-                self.vault.remove_venice_key(key_id)
-            self._send_json(res)
+            key_id = body.get("key_id", "")
+            removed_from_vault = self.vault.remove_venice_key(key_id)
+
+            remote_res = {}
+            if self.vault.get_venice_admin_key() and not key_id.startswith("vk_"):
+                remote_res = client.delete_key(key_id=key_id)
+
+            if removed_from_vault or remote_res.get("success"):
+                self._send_json({"success": True, "key_id": key_id, "message": "Key revoked and removed from vault"})
+            else:
+                self._send_json({"success": False, "error": remote_res.get("error", "Key not found in vault")})
 
         elif path == "/api/deploy_key":
             key_str = body.get("key_string", "")
             target_path = body.get("target_path")
+            # If key_str is an ID, find actual secret apiKey in vault
+            for k in self.vault.get_venice_keys():
+                if k.get("id") == key_str and k.get("apiKey"):
+                    key_str = k.get("apiKey")
+                    break
             res = ConfigDeployer.deploy_venice_key(key_str, Path(target_path) if target_path else None)
             self._send_json(res)
 
