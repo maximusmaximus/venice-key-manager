@@ -25,6 +25,16 @@
           <span class="status-dot pulse"></span>
           <span id="api-status-text">VENICE LIVE</span>
         </div>
+        <div class="node-switcher-group" style="display: flex; align-items: center; gap: 8px;">
+          <span class="text-dim" style="font-size: 11px; font-weight: 700; letter-spacing: 0.5px;">📍 MACHINE:</span>
+          <select id="select-active-node" class="input-field" style="padding: 4px 10px; font-size: 12px; height: 32px; min-width: 140px; background: rgba(15, 23, 42, 0.9);">
+            <option value="local" selected>Local (Windows)</option>
+            <option value="mcmini">mcmini (Tailscale)</option>
+          </select>
+        </div>
+        <button class="btn btn-secondary btn-sm" id="btn-sync-code" title="Pull Latest Code from GitHub">
+          <span>🔄</span> Sync Git
+        </button>
         <button class="btn btn-secondary" id="btn-refresh" title="Refresh Live Data">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
           Refresh
@@ -112,6 +122,9 @@
       </button>
       <button class="tab-btn" data-tab="tab-settings">
         <span class="tab-icon">⚙️</span> Vault & Settings
+      </button>
+      <button class="tab-btn" data-tab="tab-fleet">
+        <span class="tab-icon">🌐</span> A2A Fleet Mesh
       </button>
     </nav>
 
@@ -311,6 +324,42 @@
         </div>
       </div>
     </main>
+
+    <!-- Tab 6: A2A Fleet Mesh -->
+    <main id="tab-fleet" class="tab-content">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">A2A Fleet Mesh & Connected Machines</h2>
+          <p class="panel-desc">Federated key control and Git sync across Tailscale machines (Local Windows, mcmini, Linux nodes).</p>
+        </div>
+        <div class="panel-actions">
+          <button class="btn btn-secondary" id="btn-fleet-sync-all">
+            <span>🔄</span> Sync All Nodes
+          </button>
+          <button class="btn btn-primary" id="btn-add-fleet-node">
+            <span>➕</span> Pair New Machine
+          </button>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <table class="data-table" id="table-fleet-nodes">
+          <thead>
+            <tr>
+              <th>Machine Name</th>
+              <th>Endpoint / Address</th>
+              <th>Status</th>
+              <th>Latency</th>
+              <th>Git Version</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-fleet-nodes">
+            <tr><td colspan="6" class="text-center text-muted">Scanning fleet nodes...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
   </div>
 
   <!-- Modal: Add & Issue Venice Key -->
@@ -505,6 +554,37 @@
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="closeModal('modal-botfather-wizard')">Close</button>
         <button class="btn btn-primary" id="btn-wizard-register">Validate & Save Bot</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Pair New Fleet Machine -->
+  <div class="modal-overlay" id="modal-add-node">
+    <div class="modal card">
+      <div class="modal-header">
+        <h3 class="modal-title">🌐 Pair New Fleet Machine</h3>
+        <button class="modal-close" onclick="closeModal('modal-add-node')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Machine Identifier / Name <span class="text-danger">*</span></label>
+          <input type="text" id="new-node-name" class="input-field" placeholder="e.g. mcmini, worker-node-2">
+        </div>
+        <div class="form-group">
+          <label>Base URL / Address <span class="text-danger">*</span></label>
+          <input type="text" id="new-node-url" class="input-field" placeholder="e.g. http://100.118.227.19:8844">
+          <span class="text-dim text-mono" style="font-size: 11px;">Tailscale IP or MagicDNS hostname running Venice Key Manager</span>
+        </div>
+        <div class="form-group">
+          <label>Display Label</label>
+          <input type="text" id="new-node-label" class="input-field" placeholder="e.g. McMini (macOS)">
+        </div>
+        <div class="modal-footer" style="margin-top: 16px;">
+          <button class="btn btn-secondary" onclick="closeModal('modal-add-node')" type="button">Cancel</button>
+          <button class="btn btn-primary" id="btn-confirm-add-node" type="button">
+            <span>🌐</span> Save & Pair Node
+          </button>
+        </div>
       </div>
     </div>
   </div>

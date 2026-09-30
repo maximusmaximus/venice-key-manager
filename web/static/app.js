@@ -1,6 +1,8 @@
 // Frontend controller for Venice & Telegram Key Management Dashboard
 
 let appState = {
+  activeNode: "local",
+  fleetNodes: [],
   stats: {},
   keys: [],
   agentBots: [],
@@ -13,6 +15,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initModals();
   initInference();
   initForms();
+  initFleet();
 
   // Initial data load
   refreshAll();
@@ -138,18 +141,23 @@ function showToast(message, type = "success") {
 
 // --- Data Fetching ---
 
+function getNodeQueryParam() {
+  return (appState.activeNode && appState.activeNode !== "local") ? `?node=${encodeURIComponent(appState.activeNode)}` : "";
+}
+
 async function refreshAll() {
   await Promise.all([
     loadStats(),
     loadKeys(),
     loadAgentBots(),
-    loadConfig()
+    loadConfig(),
+    loadFleetNodes()
   ]);
 }
 
 async function loadStats() {
   try {
-    const res = await fetch("/api/stats");
+    const res = await fetch(`/api/stats${getNodeQueryParam()}`);
     const data = await res.json();
     if (data.success) {
       appState.stats = data;
@@ -190,7 +198,7 @@ async function loadStats() {
 async function loadKeys() {
   const tbody = document.getElementById("tbody-venice-keys");
   try {
-    const res = await fetch("/api/keys");
+    const res = await fetch(`/api/keys${getNodeQueryParam()}`);
     const data = await res.json();
     if (data.success && data.keys) {
       appState.keys = data.keys;
@@ -247,7 +255,7 @@ async function loadKeys() {
 async function loadAgentBots() {
   const tbody = document.getElementById("tbody-tg-bots");
   try {
-    const res = await fetch("/api/agent_bots");
+    const res = await fetch(`/api/agent_bots${getNodeQueryParam()}`);
     const data = await res.json();
     if (data.success && data.agent_bots) {
       appState.agentBots = data.agent_bots;
@@ -327,7 +335,7 @@ async function deployKey(keyId) {
     const res = await fetch("/api/deploy_key", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key_string: keyId })
+      body: JSON.stringify({ key_string: keyId, target_node: appState.activeNode })
     });
     const data = await res.json();
     if (data.success) {
@@ -346,7 +354,7 @@ async function revokeKey(keyId) {
     const res = await fetch("/api/revoke_key", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key_id: keyId })
+      body: JSON.stringify({ key_id: keyId, target_node: appState.activeNode })
     });
     const data = await res.json();
     if (data.success) {
@@ -368,7 +376,7 @@ async function testAgentBot(agentName) {
     const res = await fetch("/api/agent_bots/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent_name: agentName })
+      body: JSON.stringify({ agent_name: agentName, target_node: appState.activeNode })
     });
     const data = await res.json();
     if (data.success) {
@@ -386,7 +394,7 @@ async function deployAgentBot(agentName) {
     const res = await fetch("/api/agent_bots/deploy", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent_name: agentName })
+      body: JSON.stringify({ agent_name: agentName, target_node: appState.activeNode })
     });
     const data = await res.json();
     if (data.success) {
@@ -432,7 +440,8 @@ function initForms() {
             description: desc,
             key_type: kType,
             max_model_tier: tier,
-            limit_usd: limit ? parseFloat(limit) : null
+            limit_usd: limit ? parseFloat(limit) : null,
+            target_node: appState.activeNode
           })
         });
         const data = await res.json();
@@ -479,7 +488,8 @@ function initForms() {
           key_type: kType,
           max_model_tier: tier,
           limit_usd: limit ? parseFloat(limit) : null,
-          limit_period: period
+          limit_period: period,
+          target_node: appState.activeNode
         };
         if (adminKey) payload.admin_key = adminKey;
 
@@ -525,7 +535,7 @@ function initForms() {
       const res = await fetch("/api/agent_bots/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_name: agent, bot_token: token, config_path: configPath, notes: notes })
+        body: JSON.stringify({ agent_name: agent, bot_token: token, config_path: configPath, notes: notes, target_node: appState.activeNode })
       });
       const data = await res.json();
       if (data.success) {
@@ -555,7 +565,7 @@ function initForms() {
       const res = await fetch("/api/agent_bots/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_name: agent, bot_token: token })
+        body: JSON.stringify({ agent_name: agent, bot_token: token, target_node: appState.activeNode })
       });
       const data = await res.json();
       if (data.success) {
@@ -753,4 +763,218 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+// --- Fleet Mesh & Multi-Machine Management ---
+
+function initFleet() {
+  const selNode = document.getElementById("select-active-node");
+  if (selNode) {
+    selNode.addEventListener("change", (e) => {
+      switchActiveNode(e.target.value);
+    });
+  }
+
+  const btnSyncCode = document.getElementById("btn-sync-code");
+  if (btnSyncCode) {
+    btnSyncCode.addEventListener("click", () => {
+      syncNodeGit(appState.activeNode);
+    });
+  }
+
+  const btnSyncAll = document.getElementById("btn-fleet-sync-all");
+  if (btnSyncAll) {
+    btnSyncAll.addEventListener("click", () => {
+      syncNodeGit("all");
+    });
+  }
+
+  const btnAddNode = document.getElementById("btn-add-fleet-node");
+  if (btnAddNode) {
+    btnAddNode.addEventListener("click", () => {
+      openModal("modal-add-node");
+    });
+  }
+
+  const btnConfirmAdd = document.getElementById("btn-confirm-add-node");
+  if (btnConfirmAdd) {
+    btnConfirmAdd.addEventListener("click", handleRegisterNode);
+  }
+}
+
+async function loadFleetNodes() {
+  const tbody = document.getElementById("tbody-fleet-nodes");
+  const selNode = document.getElementById("select-active-node");
+
+  try {
+    const res = await fetch("/api/fleet/nodes?probe=1");
+    const data = await res.json();
+    if (data.success && data.nodes) {
+      appState.fleetNodes = data.nodes;
+
+      // Update dropdown options
+      if (selNode) {
+        const currentVal = appState.activeNode || "local";
+        selNode.innerHTML = data.nodes.map(n => {
+          const isSelected = n.name === currentVal ? "selected" : "";
+          const statusIcon = n.status === "online" ? "🟢" : "⚪";
+          return `<option value="${escapeHtml(n.name)}" ${isSelected}>${statusIcon} ${escapeHtml(n.label || n.name)}</option>`;
+        }).join("");
+        selNode.value = currentVal;
+      }
+
+      // Update fleet table
+      if (tbody) {
+        tbody.innerHTML = data.nodes.map(n => {
+          const isLocal = n.name === "local";
+          const isOnline = n.status === "online";
+          const statusBadge = isOnline 
+            ? `<span class="badge badge-green">ONLINE</span>` 
+            : `<span class="badge badge-dim">OFFLINE / UNREACHABLE</span>`;
+          const latency = n.latency_ms !== null && n.latency_ms !== undefined ? `${n.latency_ms} ms` : "--";
+          const version = n.version || {};
+          const commit = version.commit ? version.commit.substring(0, 7) : (isLocal ? "Local Repo" : "Unknown");
+          const branch = version.branch || "main";
+
+          return `
+            <tr>
+              <td>
+                <div style="font-weight: 700;">${escapeHtml(n.label || n.name)} ${isLocal ? '<span class="badge badge-purple" style="margin-left: 4px;">HOST</span>' : ''}</div>
+                <div class="text-dim text-mono" style="font-size: 11px;">ID: ${escapeHtml(n.name)}</div>
+              </td>
+              <td class="text-mono" style="font-size: 12px;">${escapeHtml(n.base_url || n.ip || 'localhost')}</td>
+              <td>${statusBadge}</td>
+              <td><span class="text-mono">${escapeHtml(latency)}</span></td>
+              <td>
+                <span class="badge badge-cyan text-mono">${escapeHtml(branch)}@${escapeHtml(commit)}</span>
+              </td>
+              <td>
+                <div style="display: flex; gap: 6px;">
+                  <button class="btn btn-sm btn-secondary" onclick="switchActiveNode('${escapeHtml(n.name)}')" title="Switch dashboard view to this machine">
+                    ${appState.activeNode === n.name ? '👁️ Active' : '🔄 Connect'}
+                  </button>
+                  <button class="btn btn-sm btn-secondary" onclick="syncNodeGit('${escapeHtml(n.name)}')" title="Git pull latest code on this node">
+                    📥 Pull Git
+                  </button>
+                  ${!isLocal ? `<button class="btn btn-sm btn-danger" onclick="removeFleetNode('${escapeHtml(n.name)}')" title="Remove node from mesh">🗑️</button>` : ''}
+                </div>
+              </td>
+            </tr>
+          `;
+        }).join("");
+      }
+    }
+  } catch (err) {
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">Failed to scan fleet nodes: ${err.message}</td></tr>`;
+    }
+  }
+}
+
+function switchActiveNode(nodeName) {
+  appState.activeNode = nodeName;
+  const selNode = document.getElementById("select-active-node");
+  if (selNode) selNode.value = nodeName;
+
+  const nodeObj = appState.fleetNodes.find(n => n.name === nodeName);
+  const label = nodeObj ? (nodeObj.label || nodeObj.name) : nodeName;
+
+  showToast(`Switched active node to: ${label}`, "info");
+  refreshAll();
+}
+
+async function syncNodeGit(target) {
+  const targetLabel = target === "all" ? "all fleet nodes" : target;
+  showToast(`Triggering Git pull on ${targetLabel}...`, "info");
+
+  const btnSyncCode = document.getElementById("btn-sync-code");
+  if (btnSyncCode) {
+    btnSyncCode.disabled = true;
+  }
+
+  try {
+    const res = await fetch("/api/fleet/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node: target })
+    });
+    const data = await res.json();
+    if (data.success) {
+      if (target === "all") {
+        showToast("Git sync triggered across all online nodes!");
+      } else {
+        const commit = data.commit_after ? data.commit_after.substring(0, 7) : "latest";
+        showToast(`Sync complete on ${target}! Now on commit ${commit}`);
+      }
+      loadFleetNodes();
+    } else {
+      showToast(`Git sync failed: ${data.error || 'Check server logs'}`, "error");
+    }
+  } catch (err) {
+    showToast(`Error syncing Git: ${err.message}`, "error");
+  } finally {
+    if (btnSyncCode) {
+      btnSyncCode.disabled = false;
+    }
+  }
+}
+
+async function handleRegisterNode() {
+  const nameInput = document.getElementById("new-node-name");
+  const urlInput = document.getElementById("new-node-url");
+  const labelInput = document.getElementById("new-node-label");
+
+  const name = nameInput.value.trim().toLowerCase();
+  const url = urlInput.value.trim();
+  const label = labelInput.value.trim() || name;
+
+  if (!name || !url) {
+    showToast("Node Name and Base URL are required", "error");
+    return;
+  }
+
+  try {
+    const res = await fetch("/api/fleet/register_node", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name, base_url: url, label: label })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`Node "${label}" paired with mesh!`);
+      closeModal("modal-add-node");
+      nameInput.value = "";
+      urlInput.value = "";
+      labelInput.value = "";
+      loadFleetNodes();
+    } else {
+      showToast(`Failed to pair node: ${data.error}`, "error");
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, "error");
+  }
+}
+
+async function removeFleetNode(name) {
+  if (!confirm(`Are you sure you want to remove node "${name}" from your fleet mesh?`)) return;
+
+  try {
+    const res = await fetch("/api/fleet/remove_node", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`Node "${name}" removed from mesh`);
+      if (appState.activeNode === name) {
+        switchActiveNode("local");
+      }
+      loadFleetNodes();
+    } else {
+      showToast(`Failed to remove node`, "error");
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, "error");
+  }
 }

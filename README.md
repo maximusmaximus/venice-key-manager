@@ -271,9 +271,135 @@ sudo systemctl enable --now venice-key-manager.service
 
 ---
 
+## 🌐 Multi-Node Fleet Federation & A2A Synchronization
+
+Venice Key Manager natively supports federated multi-machine operation across Tailscale Agent2Agent (A2A) networks (such as primary Windows workstation `planetaryexplorer`, Apple Silicon macOS **`mcmini`**, and remote Linux nodes).
+
+```mermaid
+flowchart LR
+    subgraph PrimaryNode["Host Node: planetaryexplorer (Windows)"]
+        Dashboard["🖥️ Web Dashboard (Port 8844)"]
+        TGBot["🤖 Telegram Bot (@songprocessor_bot)"]
+        LocalVault["🔒 venice_vault.json\n(Node-Local Admin Key)"]
+        LocalMesh["FleetMeshManager"]
+    end
+
+    subgraph PeerNode["Peer Node: mcmini (macOS)"]
+        McMiniService["⚡ Venice Key Manager\n(Port 8844 @ 100.118.227.19)"]
+        McMiniVault["🔒 venice_vault.json\n(Node-Local Admin Key)"]
+        McMiniAgents["Autonomous Agents\n(Local Configs)"]
+    end
+
+    subgraph Cloud["GitHub & Cloud Services"]
+        GitHub["GitHub Upstream\n(maximusmaximus/venice-key-manager)"]
+        VeniceAPI["Venice.ai Cloud API"]
+    end
+
+    Dashboard -->|Select mcmini| LocalMesh
+    TGBot -->|/sync_fleet mcmini| LocalMesh
+    LocalMesh -->|Tailscale HTTP Proxy| McMiniService
+    LocalMesh -->|git pull| GitHub
+    McMiniService -->|git pull| GitHub
+    LocalMesh -.->|Direct Admin Calls| VeniceAPI
+    McMiniService -.->|Direct Admin Calls| VeniceAPI
+    McMiniService --> McMiniAgents
+```
+
+### 🔒 Key Architectural Rule: Zero Credential Propagation
+* **Node-Local Isolation**: Each machine maintains its own independent `venice_vault.json` containing its node-local Venice Admin Key and agent tokens.
+* **Never Synced Over Git**: `venice_vault.json` and `.env` are strictly `.gitignore`'d and are **never** committed or synced across nodes.
+* **Mesh Request Proxying**: When Machine A (e.g. Host) configures or triggers a key on Machine B (e.g. `mcmini`), Machine A forwards the request over the encrypted Tailscale mesh (`http://100.118.227.19:8844`). Machine B issues keys locally using its own Admin key and writes to its local agent configs. Admin keys never leave their host machine!
+
+---
+
+### 🚀 Onboarding a New Machine (`mcmini` / macOS / Linux / Windows)
+
+To install or pair an existing/new machine into the Venice Key Management fleet:
+
+#### 1. Clone the Latest Code
+```bash
+git clone https://github.com/maximusmaximus/venice-key-manager.git
+cd venice-key-manager
+```
+
+#### 2. Initialize Node-Local Vault
+Create or update `venice_vault.json` with that machine's Venice API keys:
+```json
+{
+  "venice": {
+    "admin_key": "YOUR_NODE_LOCAL_ADMIN_KEY",
+    "inference_key": "YOUR_NODE_LOCAL_INFERENCE_KEY",
+    "base_url": "https://api.venice.ai/api/v1"
+  },
+  "telegram": {
+    "authorized_chat_id": "8293122782"
+  },
+  "keys": []
+}
+```
+
+#### 3. Start the Service Daemon
+
+**On macOS (`mcmini`) or Linux**:
+```bash
+# Direct run or inside tmux/screen:
+python3 run.py --all
+
+# Or run as a background daemon:
+nohup python3 run.py --all > venice_manager.log 2>&1 &
+```
+
+**On Windows (`planetaryexplorer`)**:
+```powershell
+python run.py --all
+```
+
+#### 4. Verify Service & Tailscale Pairing
+Once running on the new node, verify it responds on the Tailscale network:
+```bash
+curl http://100.118.227.19:8844/api/version
+```
+Output:
+```json
+{
+  "success": true,
+  "version": "1.2.0",
+  "commit": "2c8508b",
+  "branch": "main",
+  "node_name": "mcmini",
+  "os": "darwin"
+}
+```
+
+#### 5. Pair with Other Fleet Machines
+In the Web Dashboard (`http://localhost:8844`):
+1. Navigate to the **🌐 A2A Fleet Mesh** tab.
+2. Click **➕ Pair New Machine**.
+3. Enter Identifier (`mcmini`), Tailscale Base URL (`http://100.118.227.19:8844`), and Display Label (`McMini macOS`).
+4. Click **Save & Pair Node**.
+
+---
+
+### 🔄 Fleet Synchronization Workflow (Always Run Latest Code)
+
+Whenever code updates are pushed to GitHub, you can keep all fleet machines running the latest code without SSH-ing into each one:
+
+| Control Method | Action / Command | Description |
+| :--- | :--- | :--- |
+| **Web Dashboard** | Top-bar **`[ 📥 Pull Git ]`** button | Pulls latest commit on currently selected active machine (`local` or `mcmini`). |
+| **Web Dashboard** | **`A2A Fleet Mesh`** tab &rarr; **`[ 🔄 Sync All Nodes ]`** | Broadcasts Git update across all online machines simultaneously. |
+| **Telegram Bot** | `/fleet` | Displays live online/offline status, latency, and current Git commit per machine. |
+| **Telegram Bot** | `/sync_fleet [node\|all]` | Triggers Git pull on specific node (`/sync_fleet mcmini`) or all nodes (`/sync_fleet all`). |
+| **Telegram Bot** | Inline buttons: `[ 📥 Git Pull mcmini ]` | 1-tap update directly in chat. |
+| **MCP Tools** | `venice_fleet_sync_node(node="all")` | Automated programmatic Git pull trigger from AI agents. |
+| **REST API** | `POST /api/fleet/sync {"node": "mcmini"}` | Webhook or CI/CD deployment trigger. |
+
+---
+
 ## 🔒 Security & Privacy Guarantees
 
 * **Zero Plaintext Secrets in Git**: Secret keys, environment files, and credentials are never checked into version control.
+* **Node-Local Master Vault**: Master Admin keys never travel across the network.
 * **Single-Reveal API Keys**: Native Venice API tokens are displayed once upon minting and never stored in plaintext by the backend.
 * **E2EE & ZDR Visibility**: Visual badges and filtering for confidential hardware enclave models (AMD SEV-SNP) and Zero Data Retention models.
 * **Granular Spend Defense**: Automated hard-stop limits ensure no autonomous agent or external service can run over allocated daily or weekly USD ceilings.
@@ -283,3 +409,4 @@ sudo systemctl enable --now venice-key-manager.service
 ## 📄 License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+

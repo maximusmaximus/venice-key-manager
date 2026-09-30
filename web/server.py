@@ -23,6 +23,7 @@ from core.venice_client import VeniceClient
 from core.tg_manager import TelegramAgentManager
 from core.deployer import ConfigDeployer
 from core.tiers import MODEL_TIER_ORDER, MODEL_TIER_MAPPING, is_tier_allowed, resolve_model_tier, get_model_for_tier
+from core.mesh import FleetMeshManager
 
 logger = logging.getLogger("venice_web")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -31,6 +32,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 class DashboardRequestHandler(SimpleHTTPRequestHandler):
     vault = KeyVault()
     tg_manager = TelegramAgentManager(vault)
+    mesh = FleetMeshManager(vault)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
@@ -69,9 +71,34 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         client = self._get_venice_client()
-        path = self.path.split("?")[0]
+        raw_path = self.path
+        path = raw_path.split("?")[0]
+        query = {}
+        if "?" in raw_path:
+            for part in raw_path.split("?")[1].split("&"):
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    query[k] = v
 
-        if path == "/api/stats":
+        # Peer node forwarding for GET requests
+        target_node = query.get("node")
+        if target_node and target_node != "local":
+            clean_rel = raw_path.replace(f"node={target_node}", "").replace("&&", "&").rstrip("?&")
+            res = self.mesh.forward_request(target_node, clean_rel, method="GET")
+            self._send_json(res)
+            return
+
+        if path == "/api/version":
+            self._send_json(self.mesh.get_version_info())
+
+        elif path == "/api/fleet/nodes":
+            probe = query.get("probe") in ("1", "true")
+            self._send_json({
+                "success": True,
+                "nodes": self.mesh.list_nodes(check_health=probe)
+            })
+
+        elif path == "/api/stats":
             rate_res = client.get_rate_limits()
             balances = rate_res.get("balances", {}) if rate_res.get("success") else {"USD": 0, "DIEM": 0}
             tier = rate_res.get("apiTier", {}) if rate_res.get("success") else {}
@@ -158,7 +185,38 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
         body = self._read_json_body()
         path = self.path.split("?")[0]
 
-        if path in ("/api/create_key", "/api/keys/import"):
+        # Peer node forwarding for POST requests
+        target_node = body.get("target_node")
+        if target_node and target_node != "local":
+            res = self.mesh.forward_request(target_node, path, method="POST", payload=body)
+            self._send_json(res)
+            return
+
+        if path == "/api/fleet/sync":
+            node = body.get("node", "local")
+            if node == "all":
+                res = self.mesh.sync_all_nodes()
+            elif node == "local":
+                res = self.mesh.sync_local_code()
+            else:
+                res = self.mesh.sync_remote_node(node)
+            self._send_json(res)
+
+        elif path == "/api/fleet/register_node":
+            name = body.get("name", "")
+            base_url = body.get("base_url", "")
+            label = body.get("label", "")
+            ip = body.get("ip", "")
+            port = int(body.get("port", 8844))
+            res = self.mesh.register_node(name, base_url, label=label, ip=ip, port=port)
+            self._send_json(res)
+
+        elif path == "/api/fleet/remove_node":
+            name = body.get("name", "")
+            removed = self.mesh.remove_node(name)
+            self._send_json({"success": removed, "name": name})
+
+        elif path in ("/api/create_key", "/api/keys/import"):
             mode = body.get("mode")
             key_str = body.get("key_string", "").strip()
             desc = body.get("description", "Agent Key")

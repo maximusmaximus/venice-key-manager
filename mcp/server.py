@@ -18,6 +18,7 @@ from core.vault import KeyVault
 from core.venice_client import VeniceClient
 from core.tg_manager import TelegramAgentManager
 from core.deployer import ConfigDeployer
+from core.mesh import FleetMeshManager
 
 logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("venice_mcp")
@@ -31,6 +32,7 @@ class VeniceMCPServer:
     def __init__(self):
         self.vault = KeyVault()
         self.tg_manager = TelegramAgentManager(self.vault)
+        self.mesh = FleetMeshManager(self.vault)
 
     def _get_venice_client(self) -> VeniceClient:
         return VeniceClient(
@@ -258,6 +260,54 @@ class VeniceMCPServer:
                     },
                     "required": ["agent_name"]
                 }
+            },
+            {
+                "name": "venice_fleet_list_nodes",
+                "description": "Lists all Tailscale machines in the A2A mesh, checking live status, latency, and git versions.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "check_health": {
+                            "type": "boolean",
+                            "description": "Whether to perform live HTTP ping checks on nodes (default: true)."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "venice_fleet_sync_node",
+                "description": "Triggers git pull update on a specified machine ('local', 'mcmini', etc.) or 'all' nodes.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "node": {
+                            "type": "string",
+                            "description": "Target machine identifier ('local', 'mcmini', or 'all'). Defaults to 'local'."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "venice_fleet_register_node",
+                "description": "Pairs a new machine into the A2A fleet mesh with its base URL/port.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Unique identifier for the machine (e.g. 'mcmini', 'gpu-server')."
+                        },
+                        "base_url": {
+                            "type": "string",
+                            "description": "Base URL of the machine's Venice Key Manager service (e.g. 'http://100.118.227.19:8844')."
+                        },
+                        "label": {
+                            "type": "string",
+                            "description": "Display label for the machine (e.g. 'McMini (macOS)')."
+                        }
+                    },
+                    "required": ["name", "base_url"]
+                }
             }
         ]
 
@@ -356,6 +406,25 @@ class VeniceMCPServer:
             agent = args.get("agent_name")
             sug = args.get("suggested_name", "")
             return self.tg_manager.generate_botfather_wizard(agent, suggested_name=sug)
+
+        elif name == "venice_fleet_list_nodes":
+            chk = args.get("check_health", True)
+            return {"nodes": self.mesh.list_nodes(check_health=chk)}
+
+        elif name == "venice_fleet_sync_node":
+            target = args.get("node", "local")
+            if target == "all":
+                return self.mesh.sync_all_nodes()
+            elif target == "local":
+                return self.mesh.sync_local_code()
+            else:
+                return self.mesh.sync_remote_node(target)
+
+        elif name == "venice_fleet_register_node":
+            name_val = args.get("name")
+            base_url = args.get("base_url")
+            label_val = args.get("label", "")
+            return self.mesh.register_node(name_val, base_url, label=label_val)
 
         return {"error": f"Unknown tool: {name}"}
 

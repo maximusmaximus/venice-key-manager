@@ -20,6 +20,7 @@ from core.vault import KeyVault
 from core.venice_client import VeniceClient
 from core.tg_manager import TelegramAgentManager
 from core.deployer import ConfigDeployer
+from core.mesh import FleetMeshManager
 from core.tiers import (
     MODEL_TIER_ORDER,
     MODEL_TIER_MAPPING,
@@ -36,6 +37,7 @@ class VeniceTelegramBot:
     def __init__(self, vault: Optional[KeyVault] = None):
         self.vault = vault or KeyVault()
         self.tg_manager = TelegramAgentManager(self.vault)
+        self.mesh = FleetMeshManager(self.vault)
         self.token = self.vault.get_telegram_master_token()
         self.authorized_chat_id = self.vault.get_authorized_chat_id()
         self.api_url = f"https://api.telegram.org/bot{self.token}"
@@ -117,6 +119,10 @@ class VeniceTelegramBot:
                     {"text": "🚀 Deploy to Config", "callback_data": "act_deploy_config"}
                 ],
                 [
+                    {"text": "🌐 Fleet Nodes (mcmini)", "callback_data": "menu_fleet"},
+                    {"text": "📥 Sync Fleet Git", "callback_data": "act_sync_fleet"}
+                ],
+                [
                     {"text": "📊 Model Limits", "callback_data": "menu_limits"},
                     {"text": "🔄 Refresh Dashboard", "callback_data": "menu_main"}
                 ]
@@ -150,6 +156,7 @@ class VeniceTelegramBot:
 
         agent_count = len(self.vault.get_agent_bots())
         keys_count = len(self.vault.get_venice_keys())
+        fleet_nodes = self.mesh.list_nodes(check_health=False)
 
         return (
             f"⚡ *VENICE & TG KEY ENGINE // CONTROLLER*\n\n"
@@ -158,7 +165,8 @@ class VeniceTelegramBot:
             f"• *Account Tier*: `{tier}` (Epoch: `{epoch_str}`)\n"
             f"• *Admin Key*: `{'CONFIGURED ✅' if has_admin else 'NOT SET ⚠️ (Inference Mode)'}`\n"
             f"• *Registered Agent Bots*: `{agent_count}`\n"
-            f"• *Managed Venice Keys*: `{keys_count}`\n\n"
+            f"• *Managed Venice Keys*: `{keys_count}`\n"
+            f"• *A2A Fleet Mesh*: `{len(fleet_nodes)} node(s) configured`\n\n"
             f"Tap an interactive button below to manage keys, trigger inference, or inspect agents:"
         )
 
@@ -597,6 +605,51 @@ class VeniceTelegramBot:
                 txt = f"❌ *Failed to fetch limits*: `{res.get('error')}`"
             self.edit_message(chat_id, msg_id, txt, reply_markup=self.back_to_main_keyboard())
 
+        elif data == "menu_fleet":
+            self.answer_callback(cb_id)
+            nodes = self.mesh.list_nodes(check_health=True)
+            txt = f"🌐 *A2A Fleet Mesh & Machines ({len(nodes)})*:\n\n"
+            for n in nodes:
+                st = "🟢 ONLINE" if n.get("status") == "online" else "⚪ OFFLINE / UNREACHABLE"
+                lat = f"{n.get('latency_ms')} ms" if n.get("latency_ms") is not None else "--"
+                v = n.get("version", {})
+                cmt = v.get("commit", "unknown")[:7] if v.get("commit") else "unknown"
+                branch = v.get("branch", "main")
+                txt += (
+                    f"• *{n.get('label', n.get('name'))}* (`{n.get('name')}`)\n"
+                    f"  Status: {st} ({lat})\n"
+                    f"  Address: `{n.get('base_url', n.get('ip'))}`\n"
+                    f"  Version: `{branch}@{cmt}`\n\n"
+                )
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "📥 Git Pull mcmini", "callback_data": "act_sync_mcmini"}, {"text": "📥 Git Pull Fleet (All)", "callback_data": "act_sync_fleet"}],
+                    [{"text": "« Back to Main Dashboard", "callback_data": "menu_main"}]
+                ]
+            }
+            self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
+
+        elif data.startswith("act_sync_"):
+            target = data[len("act_sync_"):]
+            if target == "fleet":
+                self.answer_callback(cb_id, "Syncing all fleet nodes...")
+                res = self.mesh.sync_all_nodes()
+                txt = "📥 *Fleet Git Sync Result*:\n\n"
+                for n, r in res.get("results", {}).items():
+                    st = "✅ Updated" if r.get("success") else f"❌ Failed ({r.get('error')})"
+                    c_after = r.get("commit_after", "")[:7] if r.get("commit_after") else ""
+                    txt += f"• *{n}*: {st} {c_after}\n"
+            else:
+                self.answer_callback(cb_id, f"Syncing {target}...")
+                if target == "local":
+                    r = self.mesh.sync_local_code()
+                else:
+                    r = self.mesh.sync_remote_node(target)
+                st = "✅ Updated" if r.get("success") else f"❌ Failed ({r.get('error')})"
+                c_after = r.get("commit_after", "")[:7] if r.get("commit_after") else ""
+                txt = f"📥 *Git Sync for {target}*:\n\n{st} {c_after}\n{r.get('message', '')}"
+            self.edit_message(chat_id, msg_id, txt, reply_markup=self.back_to_main_keyboard())
+
     # --- Message Command Handlers ---
 
     def handle_message(self, msg: Dict[str, Any]):
@@ -710,11 +763,59 @@ class VeniceTelegramBot:
             }
             self.send_message(chat_id, txt, reply_markup=kb)
 
+        elif text.startswith("/fleet"):
+            nodes = self.mesh.list_nodes(check_health=True)
+            txt = f"🌐 *A2A Fleet Mesh & Machines ({len(nodes)})*:\n\n"
+            for n in nodes:
+                st = "🟢 ONLINE" if n.get("status") == "online" else "⚪ OFFLINE / UNREACHABLE"
+                lat = f"{n.get('latency_ms')} ms" if n.get("latency_ms") is not None else "--"
+                v = n.get("version", {})
+                cmt = v.get("commit", "unknown")[:7] if v.get("commit") else "unknown"
+                branch = v.get("branch", "main")
+                txt += (
+                    f"• *{n.get('label', n.get('name'))}* (`{n.get('name')}`)\n"
+                    f"  Status: {st} ({lat})\n"
+                    f"  Address: `{n.get('base_url', n.get('ip'))}`\n"
+                    f"  Version: `{branch}@{cmt}`\n\n"
+                )
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "📥 Git Pull mcmini", "callback_data": "act_sync_mcmini"}, {"text": "📥 Git Pull Fleet (All)", "callback_data": "act_sync_fleet"}],
+                    [{"text": "« Back to Main Dashboard", "callback_data": "menu_main"}]
+                ]
+            }
+            self.send_message(chat_id, txt, reply_markup=kb)
+
+        elif text.startswith("/sync_fleet"):
+            parts = text.split()
+            target = parts[1] if len(parts) > 1 else "all"
+            self.send_message(chat_id, f"📥 Triggering Git pull for `{target}`...")
+            if target == "all":
+                res = self.mesh.sync_all_nodes()
+                txt = "📥 *Fleet Git Sync Result*:\n\n"
+                for n, r in res.get("results", {}).items():
+                    st = "✅ Updated" if r.get("success") else f"❌ Failed ({r.get('error')})"
+                    c_after = r.get("commit_after", "")[:7] if r.get("commit_after") else ""
+                    txt += f"• *{n}*: {st} {c_after}\n"
+            elif target == "local":
+                r = self.mesh.sync_local_code()
+                st = "✅ Updated" if r.get("success") else f"❌ Failed ({r.get('error')})"
+                c_after = r.get("commit_after", "")[:7] if r.get("commit_after") else ""
+                txt = f"📥 *Git Sync Local*: {st} {c_after}\n{r.get('message', '')}"
+            else:
+                r = self.mesh.sync_remote_node(target)
+                st = "✅ Updated" if r.get("success") else f"❌ Failed ({r.get('error')})"
+                c_after = r.get("commit_after", "")[:7] if r.get("commit_after") else ""
+                txt = f"📥 *Git Sync {target}*: {st} {c_after}\n{r.get('message', '')}"
+            self.send_message(chat_id, txt)
+
         elif text.startswith("/help"):
             txt = (
                 "⚡ *Venice & TG Engine Commands*:\n\n"
                 "• `/menu` or `/start` - Open interactive control dashboard\n"
                 "• `/provision` - Open Agent Key (XS-XL) Provisioning Wizard\n"
+                "• `/fleet` - Check status of all paired fleet nodes (Local, mcmini)\n"
+                "• `/sync_fleet [node|all]` - Pull latest Git updates across machines\n"
                 "• `/balance` - Check live USD and DIEM balance\n"
                 "• `/ask <prompt>` - Run light inference on Venice\n"
                 "• `/ask_tier <xs|s|m|l|xl> <prompt>` - Inference on specific model tier\n"
