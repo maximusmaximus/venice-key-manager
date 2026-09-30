@@ -58,6 +58,208 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_html(self, html_str: str, status: int = 200):
+        body = html_str.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_claim_portal_html(self, token: str):
+        alloc = self.vault.inspect_allocation(token)
+        if not alloc.get("success"):
+            html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Venice // Invalid Key Allocation</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body style="min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #0b0f19; font-family: 'Plus Jakarta Sans', sans-serif; color: #f8fafc; padding: 20px;">
+  <div style="background: #111827; border: 1px solid #374151; border-radius: 16px; padding: 36px; max-width: 520px; width: 100%; text-align: center; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5);">
+    <div style="font-size: 48px; margin-bottom: 12px;">⚠️</div>
+    <h2 style="font-size: 22px; font-weight: 800; margin-bottom: 10px; color: #f87171;">Allocation Not Found</h2>
+    <p style="color: #9ca3af; font-size: 14px; line-height: 1.6; margin-bottom: 24px;">
+      The requested allocation token <code style="color: #cbd5e1; background: #1f2937; padding: 2px 6px; border-radius: 4px;">{token}</code> is invalid, expired, or has been revoked.
+    </p>
+    <a href="/" style="display: inline-block; background: #4f46e5; color: white; padding: 10px 20px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 13px;">← Return to Main Engine</a>
+  </div>
+</body>
+</html>"""
+            self._send_html(html, status=404)
+            return
+
+        label = alloc.get("label", "Agent Key Allocation")
+        target_agent = alloc.get("target_agent", "Agent")
+        allocated = alloc.get("allocated_keys_count", 1)
+        claimed = alloc.get("claimed_keys_count", 0)
+        remaining = alloc.get("remaining_claims", 0)
+        status = alloc.get("status", "ACTIVE")
+        valid_from = alloc.get("valid_from", "Immediate")
+        valid_until = alloc.get("valid_until", "No Expiration")
+        tier = alloc.get("quality_tier", "s").upper()
+        budget = alloc.get("budget_usd", 0.25)
+        period = alloc.get("limit_period", "DAY")
+        claim_url = alloc.get("claim_url", f"https://venice.vmu.cash/claim/{token}")
+        can_claim = alloc.get("can_claim_now", False)
+
+        status_color = "#10b981" if status == "ACTIVE" else ("#f59e0b" if status == "PENDING" else "#ef4444")
+        status_label = "READY TO CLAIM" if can_claim else ("PENDING WINDOW" if status == "PENDING" else status)
+
+        btn_markup = f"<button id='btn-claim' onclick='executeClaim()' style='width: 100%; padding: 14px; background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%); color: white; border: none; border-radius: 8px; font-weight: 700; font-size: 14px; cursor: pointer;'>⚡ Claim Allocated Key Now</button>" if can_claim else f"<div style='text-align: center; padding: 12px; background: #1e293b; border-radius: 8px; color: #94a3b8; font-size: 13px;'>Cannot claim at this time ({status_label}).</div>"
+
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Venice // Key Allocation Portal</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    .claim-card {{
+      background: #111827;
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      border-radius: 16px;
+      padding: 32px;
+      max-width: 680px;
+      width: 100%;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
+    }}
+    .stat-pill {{
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid #374151;
+      border-radius: 8px;
+      padding: 12px 16px;
+    }}
+    .code-box {{
+      background: #090d16;
+      border: 1px solid #374151;
+      border-radius: 8px;
+      padding: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: #38bdf8;
+      word-break: break-all;
+      position: relative;
+    }}
+  </style>
+</head>
+<body style="min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #090d16; font-family: 'Plus Jakarta Sans', sans-serif; color: #f8fafc; padding: 24px;">
+  <div class="claim-card">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid #1f2937; padding-bottom: 16px;">
+      <div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 26px;">⚡</span>
+          <h1 style="font-size: 22px; font-weight: 800; letter-spacing: -0.5px; margin: 0; color: #f8fafc;">Venice Key Allocation</h1>
+        </div>
+        <p style="color: #94a3b8; font-size: 13.5px; margin-top: 6px; margin-bottom: 0;">Autonomous agent key dispensary bound to Cloud DNS.</p>
+      </div>
+      <div style="background: {status_color}22; border: 1px solid {status_color}; color: {status_color}; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 20px; text-transform: uppercase;">
+        ● {status_label}
+      </div>
+    </div>
+
+    <div style="margin-bottom: 20px;">
+      <h2 style="font-size: 18px; font-weight: 700; color: #cbd5e1; margin-bottom: 4px;">{label}</h2>
+      <div style="font-size: 13px; color: #818cf8; font-family: 'JetBrains Mono', monospace;">Target Agent: <strong>{target_agent}</strong></div>
+    </div>
+
+    <!-- Allocation Metrics Grid -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px;">
+      <div class="stat-pill">
+        <div style="font-size: 11px; color: #94a3b8; font-weight: 600; text-transform: uppercase;">Allocated Keys</div>
+        <div style="font-size: 20px; font-weight: 800; color: #f8fafc; margin-top: 4px;">{allocated}</div>
+        <div style="font-size: 11px; color: #10b981;">{remaining} remaining</div>
+      </div>
+      <div class="stat-pill">
+        <div style="font-size: 11px; color: #94a3b8; font-weight: 600; text-transform: uppercase;">Model Tier</div>
+        <div style="font-size: 20px; font-weight: 800; color: #a855f7; margin-top: 4px;">Tier {tier}</div>
+        <div style="font-size: 11px; color: #94a3b8;">Max Quality Cap</div>
+      </div>
+      <div class="stat-pill">
+        <div style="font-size: 11px; color: #94a3b8; font-weight: 600; text-transform: uppercase;">Budget Cap</div>
+        <div style="font-size: 20px; font-weight: 800; color: #38bdf8; margin-top: 4px;">${budget:.2f}</div>
+        <div style="font-size: 11px; color: #94a3b8;">Reset: {period}</div>
+      </div>
+    </div>
+
+    <!-- Validity Schedule -->
+    <div style="background: rgba(15, 23, 42, 0.4); border: 1px solid #1f2937; border-radius: 8px; padding: 14px; margin-bottom: 24px; font-size: 12.5px;">
+      <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+        <span style="color: #94a3b8;">🕒 Claiming Opens:</span>
+        <strong style="color: #f8fafc; font-family: 'JetBrains Mono', monospace;">{valid_from}</strong>
+      </div>
+      <div style="display: flex; justify-content: space-between;">
+        <span style="color: #94a3b8;">⌛ Expires:</span>
+        <strong style="color: #f8fafc; font-family: 'JetBrains Mono', monospace;">{valid_until}</strong>
+      </div>
+    </div>
+
+    <!-- Claim URL / Token Box -->
+    <div style="margin-bottom: 24px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+        <label style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Cloud DNS Claim Link</label>
+        <button onclick="navigator.clipboard.writeText('{claim_url}'); this.innerText='Copied!';" style="background: none; border: none; color: #818cf8; font-size: 11px; cursor: pointer; font-weight: 600;">Copy Link</button>
+      </div>
+      <div class="code-box">{claim_url}</div>
+    </div>
+
+    <!-- Interactive Claim Button & Container -->
+    <div id="claim-action-area">
+      {btn_markup}
+      <div id="claim-result" style="margin-top: 16px; display: none;"></div>
+    </div>
+
+    <div style="margin-top: 24px; border-top: 1px solid #1f2937; padding-top: 16px; display: flex; justify-content: space-between; align-items: center;">
+      <span style="font-size: 11px; color: #64748b;">Venice Key Manager // Autonomous Fleet</span>
+      <a href="/" style="font-size: 12px; color: #94a3b8; text-decoration: none;">Dashboard →</a>
+    </div>
+  </div>
+
+  <script>
+    async function executeClaim() {{
+      const btn = document.getElementById('btn-claim');
+      const resDiv = document.getElementById('claim-result');
+      if (btn) btn.disabled = true;
+      try {{
+        const res = await fetch('/api/allocations/claim', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ claim_token: '{token}', agent_id: '{target_agent}' }})
+        }});
+        const data = await res.json();
+        if (data.success) {{
+          resDiv.style.display = 'block';
+          resDiv.innerHTML = `
+            <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid #10b981; border-radius: 8px; padding: 16px;">
+              <div style="color: #10b981; font-weight: 700; font-size: 14px; margin-bottom: 8px;">✅ Key Claimed Successfully!</div>
+              <div style="font-size: 12px; color: #cbd5e1; margin-bottom: 8px;">Your allocated Venice API key:</div>
+              <div class="code-box" style="color: #34d399; margin-bottom: 10px;">${{data.api_key}}</div>
+              <button onclick="navigator.clipboard.writeText('${{data.api_key}}'); this.innerText='Key Copied!';" style="background: #10b981; color: white; border: none; border-radius: 6px; padding: 8px 14px; font-size: 12px; font-weight: 600; cursor: pointer;">📋 Copy Venice Key</button>
+            </div>
+          `;
+          if (btn) btn.style.display = 'none';
+        }} else {{
+          resDiv.style.display = 'block';
+          resDiv.innerHTML = `<div style="color: #f87171; font-size: 13px; background: rgba(239, 68, 68, 0.1); border: 1px solid #ef4444; border-radius: 8px; padding: 12px;">❌ ${{data.error || 'Failed to claim key.'}}</div>`;
+          if (btn) btn.disabled = false;
+        }}
+      }} catch (err) {{
+        resDiv.style.display = 'block';
+        resDiv.innerHTML = `<div style="color: #f87171; font-size: 13px;">Error: ${{err.message}}</div>`;
+        if (btn) btn.disabled = false;
+      }}
+    }}
+  </script>
+</body>
+</html>"""
+        self._send_html(html, status=200)
+
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -143,6 +345,21 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             self._send_json(supervisor.get_status())
             return
 
+        elif path.startswith("/claim/"):
+            token = path[7:].strip("/")
+            if query.get("format") == "json" or "application/json" in self.headers.get("Accept", ""):
+                res = self.vault.inspect_allocation(token)
+                self._send_json(res, status=200 if res.get("success") else 404)
+            else:
+                self._send_claim_portal_html(token)
+            return
+
+        elif path == "/api/allocations/inspect":
+            token_or_url = query.get("token") or query.get("url") or query.get("claim_token") or ""
+            res = self.vault.inspect_allocation(token_or_url)
+            self._send_json(res, status=200 if res.get("success") else 404)
+            return
+
         # 2. Pairing Gate for all other /api/* endpoints
         if path.startswith("/api/"):
             if not self._is_authenticated(query):
@@ -159,6 +376,13 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({
                 "success": True,
                 "nodes": self.mesh.list_nodes(check_health=probe)
+            })
+
+        elif path == "/api/allocations":
+            target_agent = query.get("target_agent")
+            self._send_json({
+                "success": True,
+                "allocations": self.vault.get_allocations(include_secret=False, target_agent=target_agent)
             })
 
         elif path == "/api/subkeys":
@@ -348,6 +572,34 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             })
             return
 
+        elif path == "/api/allocations/claim":
+            token_or_url = (body.get("claim_token") or body.get("claim_url") or body.get("token") or "").strip()
+            agent_id = (body.get("agent_id") or "").strip()
+            auto_deploy = bool(body.get("auto_deploy", False))
+            target_path = body.get("target_path")
+
+            claim_res = self.vault.claim_allocation(
+                token_or_url,
+                agent_id=agent_id,
+                client_info=f"Web Claim {self.client_address[0]}"
+            )
+            if not claim_res.get("success"):
+                self._send_json(claim_res, status=400)
+                return
+
+            if auto_deploy:
+                key_str = claim_res.get("api_key")
+                ag_name = agent_id or claim_res.get("target_agent")
+                deploy_res = ConfigDeployer.deploy_venice_key(
+                    key_str,
+                    target_path=target_path,
+                    agent_name=ag_name
+                )
+                claim_res["deployment"] = deploy_res
+
+            self._send_json(claim_res, status=200)
+            return
+
         # 2. Pairing Gate for all other /api/* POST endpoints
         if path.startswith("/api/"):
             if not self._is_authenticated(query, body):
@@ -466,6 +718,51 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             name = body.get("name", "")
             removed = self.mesh.remove_node(name)
             self._send_json({"success": removed, "name": name})
+
+        elif path == "/api/allocations/mint":
+            label = (body.get("label") or "").strip()
+            target_agent = (body.get("target_agent") or "").strip()
+            allocated_keys_count = int(body.get("allocated_keys_count", 1))
+            valid_from = body.get("valid_from")
+            valid_until = body.get("valid_until")
+            quality_tier = (body.get("quality_tier") or "s").strip()
+            budget_usd = float(body.get("budget_usd", 0.25))
+            limit_period = (body.get("limit_period") or "DAY").strip()
+            target_node = (body.get("target_node") or "local").strip()
+            api_key = body.get("api_key")
+
+            alloc = self.vault.mint_allocation(
+                label=label,
+                target_agent=target_agent,
+                allocated_keys_count=allocated_keys_count,
+                valid_from=valid_from,
+                valid_until=valid_until,
+                quality_tier=quality_tier,
+                budget_usd=budget_usd,
+                limit_period=limit_period,
+                target_node=target_node,
+                api_key=api_key
+            )
+            self._send_json({
+                "success": True,
+                "allocation": alloc,
+                "claim_url": alloc["claim_url"],
+                "claim_token": alloc["claim_token"],
+                "message": f"Successfully minted allocation for '{alloc['target_agent']}'."
+            })
+            return
+
+        elif path == "/api/allocations/revoke":
+            alloc_id = (body.get("id") or body.get("claim_token") or "").strip()
+            revoked = self.vault.revoke_allocation(alloc_id)
+            self._send_json({"success": revoked})
+            return
+
+        elif path == "/api/allocations/delete":
+            alloc_id = (body.get("id") or body.get("claim_token") or "").strip()
+            deleted = self.vault.delete_allocation(alloc_id)
+            self._send_json({"success": deleted})
+            return
 
         elif path in ("/api/create_key", "/api/keys/import"):
             mode = body.get("mode")

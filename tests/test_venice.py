@@ -7,7 +7,7 @@ import io
 from pathlib import Path
 
 # Fix Windows console UTF-8 encoding
-if hasattr(sys.stdout, "buffer") and not getattr(sys.stdout, "closed", False):
+if "pytest" not in sys.modules and hasattr(sys.stdout, "buffer") and not getattr(sys.stdout, "closed", False):
     try:
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     except Exception:

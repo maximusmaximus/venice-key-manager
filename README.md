@@ -41,6 +41,23 @@ Clients can request models by size tier or explicit model identifier:
 * **Enforced Default Rule**: **Unless explicitly specified by an admin, all sub-keys default to \$0.25 USD per project per day**.
 * Sub-keys automatically inherit the parent project scope, are capped by parent tier restrictions, and cannot exceed parent daily allowances.
 
+### 🎟️ Agent Key Allocations (`https://venice.vmu.cash/claim/...`)
+Venice Key Manager provides an automated, secure key distribution protocol for autonomous agents without directly sharing raw secret keys:
+* **Cloud DNS Canonical Pattern**: All minted allocation links follow the format `https://venice.vmu.cash/claim/<claim_token>` with a 48-character cryptographically secure token (`vclm_...`).
+* **Zero Secret Key Exposure**: The raw Venice API key is stored securely in the local vault and is never exposed in the URL, shared in chat, or returned by public inspection endpoints.
+* **Transparent Quota & Schedule Telemetry**:
+  - `allocated_keys_count`: Total keys allocated to this claim token (e.g. 1 key, or a pool of N keys).
+  - `remaining_claims`: Real-time remaining keys available to claim.
+  - `valid_from` & `valid_until`: Cryptographically enforced claiming window. Requests made before `valid_from` return `400 PENDING`, and requests made after `valid_until` return `400 EXPIRED`.
+  - `can_claim_now`: Boolean indicating immediate eligibility to claim.
+* **Interactive Claim Portal & MCP Tooling**:
+  - **Browser Landing Page**: Visiting `/claim/<token>` displays an obsidian-styled card showing agent target, model tier, budget cap, and an interactive **⚡ Claim Allocated Key Now** button.
+  - **Model Context Protocol (MCP)**:
+    - `venice_mint_allocation`: Mint claim links with custom key counts, validity windows, and quality tiers (`xs` to `xl`).
+    - `venice_inspect_allocation`: Publicly inspect quota, status, and dates without revealing secret keys.
+    - `venice_claim_allocated_key`: Agents claim their allocated key upon request via MCP, with optional automatic deployment to local `config.yaml`.
+    - `venice_list_allocations`: Fleet overview of all active, pending, and claimed allocations.
+
 ### 📊 Reactive Web Dashboard (Port 8660)
 * Dark-mode terminal/obsidian UI with real-time KPI metrics, spend progress bars, and countdown timers.
 * Dedicated **🌐 External Allocations** tab for project management, external key minting, and cURL / Python code snippets.

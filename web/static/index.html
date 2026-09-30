@@ -215,6 +215,39 @@
         </table>
       </div>
 
+      <!-- Section: Agent Key Allocations (Cloud DNS Claim Links) -->
+      <div style="margin-top: 32px;">
+        <div class="panel-header" style="margin-bottom: 12px;">
+          <div>
+            <h3 class="panel-title" style="font-size: 16px;">Agent Key Allocations (<code class="text-cyan">venice.vmu.cash/claim/...</code>)</h3>
+            <p class="panel-desc">Mint secure claim links for agents with configured key counts and claiming windows, without revealing raw Venice API keys.</p>
+          </div>
+          <div class="panel-actions">
+            <button class="btn btn-primary btn-sm" id="btn-open-mint-alloc" onclick="openModal('modal-mint-allocation')">
+              <span>🎟️</span> Mint Claim Link
+            </button>
+          </div>
+        </div>
+        <div class="table-container">
+          <table class="data-table" id="table-allocations">
+            <thead>
+              <tr>
+                <th>Allocation / Agent</th>
+                <th>Cloud DNS Claim Link (venice.vmu.cash)</th>
+                <th>Allocated / Remaining</th>
+                <th>Claim Window</th>
+                <th>Quality Tier & Budget</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-allocations">
+              <tr><td colspan="7" class="text-center text-muted">Loading allocations...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div style="margin-top: 32px;">
         <div class="panel-header" style="margin-bottom: 12px;">
           <div>
@@ -832,6 +865,116 @@
         <button class="btn btn-secondary" onclick="closeModal('modal-create-subkey')" type="button">Cancel</button>
         <button class="btn btn-primary" id="btn-confirm-create-subkey" type="button">
           <span>⚡</span> Mint & Deploy Sub-Key
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Mint Agent Key Allocation -->
+  <div class="modal-overlay" id="modal-mint-allocation">
+    <div class="modal card" style="max-width: 680px; width: 95%;">
+      <div class="modal-header">
+        <h3 class="modal-title">🎟️ Mint Agent Key Allocation</h3>
+        <button class="modal-close" onclick="closeModal('modal-mint-allocation')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+          Generate a secure, copyable Cloud DNS link (<code class="text-cyan">https://venice.vmu.cash/claim/...</code>) for an agent. The agent can claim its allocated key quota via MCP without you sharing raw Venice API keys directly.
+        </p>
+
+        <div id="alloc-form-fields">
+          <div class="form-group">
+            <label>Allocation Label / Description <span class="text-danger">*</span></label>
+            <input type="text" id="alloc-label" class="input-field" placeholder="e.g. Hermes Music Production Agent Key">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Target Agent Name <span class="text-danger">*</span></label>
+              <input type="text" id="alloc-target-agent" class="input-field" placeholder="e.g. hermes-music, dawagent, a2a-node">
+            </div>
+            <div class="form-group">
+              <label>Keys to Allocate</label>
+              <input type="number" id="alloc-keys-count" class="input-field" value="1" min="1" max="100">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Model Quality Tier Limit</label>
+              <select id="alloc-tier" class="input-field">
+                <option value="xs">XS - Ultra-Fast / Low Cost (1B-3B)</option>
+                <option value="s" selected>S - Fast & Efficient (Flash / 8B-14B - Default)</option>
+                <option value="m">M - Balanced Quality (70B, Coding)</option>
+                <option value="l">L - Deep Reasoning (R1, 72B+)</option>
+                <option value="xl">XL - Maximum Quality / Frontier</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Budget Limit (USD)</label>
+              <input type="number" id="alloc-budget" class="input-field" value="0.25" step="0.05" min="0.05">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Claiming Opens (Valid From)</label>
+              <input type="datetime-local" id="alloc-valid-from" class="input-field">
+              <span class="text-dim" style="font-size: 11px;">Leave blank for immediate claimability</span>
+            </div>
+            <div class="form-group">
+              <label>Claiming Closes (Valid Until / Expiry)</label>
+              <input type="datetime-local" id="alloc-valid-until" class="input-field">
+              <span class="text-dim" style="font-size: 11px;">Optional expiration timestamp</span>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Limit Period</label>
+              <select id="alloc-period" class="input-field">
+                <option value="DAY" selected>Daily Reset</option>
+                <option value="MONTH">Monthly Reset</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Target Mesh Machine</label>
+              <select id="alloc-target-node" class="input-field">
+                <option value="local" selected>Local (Windows)</option>
+                <option value="mcmini">mcmini (Tailscale)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Success Output Box (Shown after minting) -->
+        <div id="alloc-success-box" style="display: none; background: rgba(16, 185, 129, 0.08); border: 1px solid #10b981; border-radius: var(--radius-md); padding: 18px; margin-top: 14px;">
+          <div style="display: flex; align-items: center; gap: 8px; color: #10b981; font-weight: 700; margin-bottom: 8px;">
+            <span>✅</span> Allocation Link Successfully Minted!
+          </div>
+          <p style="font-size: 12.5px; color: var(--text-muted); margin-bottom: 12px;">
+            Copy this Cloud DNS link to share with the agent. The agent can claim its allocated key upon request via MCP:
+          </p>
+          <div class="form-group" style="margin-bottom: 10px;">
+            <label style="font-size: 11px; text-transform: uppercase;">Cloud DNS Claim URL (venice.vmu.cash)</label>
+            <div style="display: flex; gap: 8px;">
+              <input type="text" id="alloc-result-url" class="input-field text-mono" readonly style="font-size: 12px; color: #38bdf8;">
+              <button class="btn btn-secondary btn-sm" id="btn-copy-alloc-url" style="white-space: nowrap;">Copy Link</button>
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom: 12px;">
+            <label style="font-size: 11px; text-transform: uppercase;">Claim Token</label>
+            <div style="display: flex; gap: 8px;">
+              <input type="text" id="alloc-result-token" class="input-field text-mono" readonly style="font-size: 12px;">
+              <button class="btn btn-secondary btn-sm" id="btn-copy-alloc-token" style="white-space: nowrap;">Copy Token</button>
+            </div>
+          </div>
+          <div style="font-size: 11.5px; color: var(--text-muted); background: var(--bg-input); padding: 10px; border-radius: 6px; border: 1px solid var(--border-color);">
+            <strong style="color: var(--text-main);">Agent MCP Claim Command:</strong><br>
+            <code class="text-mono text-cyan" id="alloc-result-mcp-snippet">venice_claim_allocated_key(claim_token_or_url="...")</code>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-mint-allocation')" type="button">Close</button>
+        <button class="btn btn-primary" id="btn-confirm-mint-alloc" type="button">
+          <span>⚡</span> Mint Allocation Link
         </button>
       </div>
     </div>

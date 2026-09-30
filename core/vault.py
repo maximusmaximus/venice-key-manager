@@ -7,6 +7,7 @@ persistence, multi-tier secure backup snapshots, and crash-resilient auto-recall
 import json
 import logging
 import os
+import secrets
 import shutil
 import time
 from datetime import datetime
@@ -90,11 +91,12 @@ def _has_valuable_keys(data: Dict[str, Any]) -> bool:
     venice = data.get("venice", {})
     tg = data.get("telegram", {})
     subkeys = data.get("subkeys", [])
+    allocations = data.get("allocations", [])
     if venice.get("admin_key") or venice.get("inference_key") or venice.get("keys"):
         return True
     if tg.get("master_bot_token") or tg.get("agent_bots"):
         return True
-    if subkeys:
+    if subkeys or allocations:
         return True
     return False
 
@@ -643,7 +645,8 @@ class KeyVault:
             "has_admin_key": bool(self.get_venice_admin_key()),
             "has_inference_key": bool(self.get_venice_inference_key()),
             "keys_count": len(self.get_venice_keys()),
-            "subkeys_count": len(self.get_subkeys())
+            "subkeys_count": len(self.get_subkeys()),
+            "allocations_count": len(self.data.get("allocations", []))
         }
 
     # --- Venice Key Helpers ---
@@ -829,3 +832,304 @@ class KeyVault:
             self._save(force=True, create_snapshot=True)
             return True
         return False
+
+    # --- Agent Key Allocations (venice.vmu.cash/claim/...) ---
+
+    def mint_allocation(
+        self,
+        label: str,
+        target_agent: str,
+        allocated_keys_count: int = 1,
+        valid_from: Optional[str] = None,
+        valid_until: Optional[str] = None,
+        quality_tier: str = "s",
+        budget_usd: float = 0.25,
+        limit_period: str = "DAY",
+        target_node: str = "local",
+        api_key: Optional[str] = None,
+        raw_metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Mints a secure, claimable key allocation link (https://venice.vmu.cash/claim/<token>)
+        for an agent without exposing the raw Venice API key directly.
+        """
+        alloc_id = f"alloc_{secrets.token_hex(6)}"
+        claim_token = f"vclm_{secrets.token_hex(24)}"
+
+        cf_domain = self.get_cloudflare_config().get("domain") or "venice.vmu.cash"
+        cf_domain = cf_domain.strip().rstrip("/")
+        claim_url = f"https://{cf_domain}/claim/{claim_token}"
+
+        now_str = datetime.utcnow().isoformat() + "Z"
+        v_from = valid_from if valid_from else now_str
+
+        chosen_key = (api_key or "").strip()
+        if not chosen_key:
+            chosen_key = self.get_active_venice_key()
+
+        allocation_record = {
+            "id": alloc_id,
+            "label": (label or f"Allocation for {target_agent}").strip(),
+            "target_agent": (target_agent or "agent").strip(),
+            "target_node": (target_node or "local").strip(),
+            "claim_token": claim_token,
+            "claim_url": claim_url,
+            "allocated_keys_count": max(1, int(allocated_keys_count)),
+            "claimed_keys_count": 0,
+            "valid_from": v_from,
+            "valid_until": valid_until if valid_until else None,
+            "quality_tier": quality_tier.lower() if quality_tier else "s",
+            "budget_usd": float(budget_usd) if budget_usd is not None else 0.25,
+            "limit_period": limit_period.upper() if limit_period else "DAY",
+            "status": "ACTIVE",
+            "created_at": now_str,
+            "api_key": chosen_key,
+            "apiKey": chosen_key,
+            "claims_history": [],
+            "raw_metadata": raw_metadata or {}
+        }
+
+        allocations = self.data.setdefault("allocations", [])
+        allocations.insert(0, allocation_record)
+        self._save(force=True, create_snapshot=True)
+        return allocation_record
+
+    def _compute_allocation_status(self, alloc: Dict[str, Any]) -> str:
+        """Determines real-time dynamic status based on claims and validity window."""
+        base_status = alloc.get("status", "ACTIVE")
+        if base_status == "REVOKED":
+            return "REVOKED"
+
+        allocated = alloc.get("allocated_keys_count", 1)
+        claimed = alloc.get("claimed_keys_count", 0)
+        if claimed >= allocated:
+            return "CLAIMED"
+
+        now = datetime.utcnow()
+        dt_from = _parse_iso(alloc.get("valid_from"))
+        if dt_from and now < dt_from:
+            return "PENDING"
+
+        dt_until = _parse_iso(alloc.get("valid_until"))
+        if dt_until and now > dt_until:
+            return "EXPIRED"
+
+        return "ACTIVE"
+
+    def get_allocations(self, include_secret: bool = False, target_agent: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Lists key allocations, dynamically resolving status and masking secrets if requested."""
+        raw_list = self.data.get("allocations", [])
+        results = []
+        for item in raw_list:
+            if target_agent and item.get("target_agent") != target_agent:
+                continue
+            computed_status = self._compute_allocation_status(item)
+            allocated = item.get("allocated_keys_count", 1)
+            claimed = item.get("claimed_keys_count", 0)
+            remaining = max(0, allocated - claimed)
+            can_claim_now = (computed_status == "ACTIVE" and remaining > 0)
+
+            rec = dict(item)
+            rec["status"] = computed_status
+            rec["remaining_claims"] = remaining
+            rec["can_claim_now"] = can_claim_now
+
+            if not include_secret:
+                k = rec.get("api_key") or rec.get("apiKey") or ""
+                rec["masked_key"] = f"***{k[-4:]}" if len(k) >= 4 else "***"
+                rec.pop("api_key", None)
+                rec.pop("apiKey", None)
+
+            results.append(rec)
+        return results
+
+    def get_allocation(self, alloc_id_or_token: str, include_secret: bool = False) -> Optional[Dict[str, Any]]:
+        """Finds allocation by ID, token, or full claim URL."""
+        if not alloc_id_or_token:
+            return None
+        cleaned = alloc_id_or_token.strip().rstrip("/")
+        token = cleaned.split("/")[-1] if "/" in cleaned else cleaned
+
+        for item in self.data.get("allocations", []):
+            if item.get("id") == token or item.get("claim_token") == token:
+                computed_status = self._compute_allocation_status(item)
+                allocated = item.get("allocated_keys_count", 1)
+                claimed = item.get("claimed_keys_count", 0)
+                remaining = max(0, allocated - claimed)
+                can_claim_now = (computed_status == "ACTIVE" and remaining > 0)
+
+                rec = dict(item)
+                rec["status"] = computed_status
+                rec["remaining_claims"] = remaining
+                rec["can_claim_now"] = can_claim_now
+
+                if not include_secret:
+                    k = rec.get("api_key") or rec.get("apiKey") or ""
+                    rec["masked_key"] = f"***{k[-4:]}" if len(k) >= 4 else "***"
+                    rec.pop("api_key", None)
+                    rec.pop("apiKey", None)
+
+                return rec
+        return None
+
+    def inspect_allocation(self, claim_token_or_url: str) -> Dict[str, Any]:
+        """
+        Public/safe inspection: returns counts, dates, and claiming window
+        without revealing the underlying secret Venice API key.
+        """
+        alloc = self.get_allocation(claim_token_or_url, include_secret=False)
+        if not alloc:
+            return {
+                "success": False,
+                "error": "Allocation not found. Please verify the claim link or token."
+            }
+
+        return {
+            "success": True,
+            "id": alloc["id"],
+            "label": alloc["label"],
+            "target_agent": alloc["target_agent"],
+            "target_node": alloc.get("target_node", "local"),
+            "claim_token": alloc["claim_token"],
+            "claim_url": alloc["claim_url"],
+            "allocated_keys_count": alloc["allocated_keys_count"],
+            "claimed_keys_count": alloc.get("claimed_keys_count", 0),
+            "remaining_claims": alloc["remaining_claims"],
+            "valid_from": alloc.get("valid_from"),
+            "valid_until": alloc.get("valid_until"),
+            "can_claim_now": alloc["can_claim_now"],
+            "status": alloc["status"],
+            "quality_tier": alloc.get("quality_tier", "s"),
+            "budget_usd": alloc.get("budget_usd", 0.25),
+            "limit_period": alloc.get("limit_period", "DAY"),
+            "created_at": alloc.get("created_at"),
+            "total_claims": len(alloc.get("claims_history", []))
+        }
+
+    def claim_allocation(self, claim_token_or_url: str, agent_id: str = "", client_info: str = "") -> Dict[str, Any]:
+        """
+        Processes key claim by an agent. Validates token, claiming schedule,
+        and availability. Decrements remaining claims and dispenses the Venice API key.
+        """
+        if not claim_token_or_url:
+            return {"success": False, "error": "Missing claim token or URL."}
+
+        cleaned = claim_token_or_url.strip().rstrip("/")
+        token = cleaned.split("/")[-1] if "/" in cleaned else cleaned
+
+        raw_alloc = None
+        for item in self.data.get("allocations", []):
+            if item.get("id") == token or item.get("claim_token") == token:
+                raw_alloc = item
+                break
+
+        if not raw_alloc:
+            return {"success": False, "error": "Invalid claim token. No matching allocation found."}
+
+        if raw_alloc.get("status") == "REVOKED":
+            return {"success": False, "error": "This allocation has been revoked by the administrator."}
+
+        now = datetime.utcnow()
+        dt_from = _parse_iso(raw_alloc.get("valid_from"))
+        if dt_from and now < dt_from:
+            return {
+                "success": False,
+                "error": f"Allocation is not yet claimable. Claiming opens at {raw_alloc.get('valid_from')}."
+            }
+
+        dt_until = _parse_iso(raw_alloc.get("valid_until"))
+        if dt_until and now > dt_until:
+            raw_alloc["status"] = "EXPIRED"
+            self._save(force=True, create_snapshot=True)
+            return {
+                "success": False,
+                "error": f"Allocation expired on {raw_alloc.get('valid_until')}."
+            }
+
+        allocated = int(raw_alloc.get("allocated_keys_count", 1))
+        claimed = int(raw_alloc.get("claimed_keys_count", 0))
+        if claimed >= allocated:
+            raw_alloc["status"] = "CLAIMED"
+            self._save(force=True, create_snapshot=True)
+            return {
+                "success": False,
+                "error": f"All allocated keys ({allocated}) have already been claimed."
+            }
+
+        claimed += 1
+        raw_alloc["claimed_keys_count"] = claimed
+        if claimed >= allocated:
+            raw_alloc["status"] = "CLAIMED"
+
+        now_str = datetime.utcnow().isoformat() + "Z"
+        claim_event = {
+            "claimed_at": now_str,
+            "agent_id": agent_id or raw_alloc.get("target_agent", "agent"),
+            "client_info": client_info or "MCP/REST Request"
+        }
+        raw_alloc.setdefault("claims_history", []).append(claim_event)
+        self._save(force=True, create_snapshot=True)
+
+        dispensed_key = raw_alloc.get("api_key") or raw_alloc.get("apiKey") or self.get_active_venice_key()
+        return {
+            "success": True,
+            "api_key": dispensed_key,
+            "apiKey": dispensed_key,
+            "allocation_id": raw_alloc["id"],
+            "label": raw_alloc["label"],
+            "target_agent": raw_alloc["target_agent"],
+            "target_node": raw_alloc.get("target_node", "local"),
+            "quality_tier": raw_alloc.get("quality_tier", "s"),
+            "budget_usd": raw_alloc.get("budget_usd", 0.25),
+            "limit_period": raw_alloc.get("limit_period", "DAY"),
+            "allocated_keys_count": allocated,
+            "claimed_keys_count": claimed,
+            "remaining_claims": max(0, allocated - claimed),
+            "status": raw_alloc["status"],
+            "message": f"Successfully claimed key for '{agent_id or raw_alloc['target_agent']}'."
+        }
+
+    def revoke_allocation(self, alloc_id_or_token: str) -> bool:
+        """Revokes an allocation, rendering it unclaimable."""
+        if not alloc_id_or_token:
+            return False
+        cleaned = alloc_id_or_token.strip().rstrip("/")
+        token = cleaned.split("/")[-1] if "/" in cleaned else cleaned
+
+        for item in self.data.get("allocations", []):
+            if item.get("id") == token or item.get("claim_token") == token:
+                item["status"] = "REVOKED"
+                self._save(force=True, create_snapshot=True)
+                return True
+        return False
+
+    def delete_allocation(self, alloc_id_or_token: str) -> bool:
+        """Permanently removes an allocation record."""
+        if not alloc_id_or_token:
+            return False
+        cleaned = alloc_id_or_token.strip().rstrip("/")
+        token = cleaned.split("/")[-1] if "/" in cleaned else cleaned
+
+        allocations = self.data.setdefault("allocations", [])
+        initial_len = len(allocations)
+        self.data["allocations"] = [
+            a for a in allocations if a.get("id") != token and a.get("claim_token") != token
+        ]
+        if len(self.data["allocations"]) < initial_len:
+            self._save(force=True, create_snapshot=True)
+            return True
+        return False
+
+
+def _parse_iso(iso_str: Optional[str]) -> Optional[datetime]:
+    if not iso_str:
+        return None
+    s = str(iso_str).strip().rstrip("Z")
+    if "+" in s:
+        s = s.split("+")[0]
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            pass
+    return None

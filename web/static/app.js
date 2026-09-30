@@ -6,6 +6,7 @@ let appState = {
   stats: {},
   keys: [],
   subkeys: [],
+  allocations: [],
   agentBots: [],
   rateLimits: [],
   authenticated: false,
@@ -131,12 +132,39 @@ function initModals() {
       if (secImport) secImport.style.display = "none";
     });
   }
+
+  const btnCopyAllocUrl = document.getElementById("btn-copy-alloc-url");
+  if (btnCopyAllocUrl) {
+    btnCopyAllocUrl.addEventListener("click", () => {
+      const urlBox = document.getElementById("alloc-result-url");
+      if (urlBox) copyToClipboard(urlBox.value, "Cloud DNS claim link copied!");
+    });
+  }
+
+  const btnCopyAllocToken = document.getElementById("btn-copy-alloc-token");
+  if (btnCopyAllocToken) {
+    btnCopyAllocToken.addEventListener("click", () => {
+      const tokenBox = document.getElementById("alloc-result-token");
+      if (tokenBox) copyToClipboard(tokenBox.value, "Claim token copied!");
+    });
+  }
 }
 
 function openModal(id) {
   const modal = document.getElementById(id);
   if (!modal) return;
   modal.classList.add("active");
+
+  if (id === "modal-mint-allocation") {
+    const successBox = document.getElementById("alloc-success-box");
+    const btn = document.getElementById("btn-confirm-mint-alloc");
+    if (successBox) successBox.style.display = "none";
+    if (btn) {
+      btn.style.display = "inline-flex";
+      btn.disabled = false;
+      btn.innerHTML = `<span>⚡</span> Mint Allocation Link`;
+    }
+  }
 
   if (id === "modal-create-key") {
     const hasAdmin = Boolean(appState.stats && appState.stats.has_admin_key);
@@ -241,6 +269,7 @@ async function refreshAll() {
       loadStats(),
       loadKeys(),
       loadSubkeys(),
+      loadAllocations(),
       loadAgentBots(),
       loadConfig(),
       loadVaultStatus(),
@@ -1469,6 +1498,9 @@ function initPairingAndSubkeys() {
 
   const btnConfirmSubkey = document.getElementById("btn-confirm-create-subkey");
   if (btnConfirmSubkey) btnConfirmSubkey.addEventListener("click", handleCreateSubkey);
+
+  const btnConfirmAlloc = document.getElementById("btn-confirm-mint-alloc");
+  if (btnConfirmAlloc) btnConfirmAlloc.addEventListener("click", handleMintAllocation);
 }
 
 function handlePairToggle() {
@@ -1695,3 +1727,219 @@ async function promptApplySubkey(subkeyId) {
     showToast(`Error: ${err.message}`, "error");
   }
 }
+
+// --- Agent Key Allocations (venice.vmu.cash) ---
+
+async function loadAllocations() {
+  const tbody = document.getElementById("tbody-allocations");
+  if (!tbody) return;
+
+  try {
+    const res = await apiFetch(`/api/allocations${getNodeQueryParam()}`);
+    if (res.status === 401) {
+      tbody.innerHTML = `<tr><td colspan="7" class="text-center text-muted" style="padding: 24px;">🔒 Enter pairing code to view agent key allocations.</td></tr>`;
+      return;
+    }
+    const data = await res.json();
+    if (data.success && data.allocations) {
+      appState.allocations = data.allocations;
+      if (data.allocations.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center text-muted">No key allocations minted yet. Tap "Mint Claim Link" to create one.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = data.allocations.map(alloc => {
+        const id = alloc.id || "N/A";
+        const label = alloc.label || "Key Allocation";
+        const agent = alloc.target_agent || "agent";
+        const node = alloc.target_node || "local";
+        const claimUrl = alloc.claim_url || `https://venice.vmu.cash/claim/${alloc.claim_token}`;
+        const token = alloc.claim_token || "";
+        const allocated = alloc.allocated_keys_count || 1;
+        const remaining = alloc.remaining_claims !== undefined ? alloc.remaining_claims : allocated;
+        const tier = (alloc.quality_tier || "s").toUpperCase();
+        const budget = alloc.budget_usd !== undefined ? `$${Number(alloc.budget_usd).toFixed(2)}` : "$0.25";
+        const period = alloc.limit_period || "DAY";
+        const status = alloc.status || "ACTIVE";
+        const vFrom = alloc.valid_from ? new Date(alloc.valid_from).toLocaleDateString() : "Immediate";
+        const vUntil = alloc.valid_until ? new Date(alloc.valid_until).toLocaleDateString() : "No Expiry";
+
+        let statusBadge = "badge-green";
+        if (status === "PENDING") statusBadge = "badge-yellow";
+        else if (status === "CLAIMED") statusBadge = "badge-purple";
+        else if (status === "EXPIRED") statusBadge = "badge-dim";
+        else if (status === "REVOKED") statusBadge = "badge-danger";
+
+        let tierBadgeClass = "badge-green";
+        if (tier === "XS") tierBadgeClass = "badge-cyan";
+        else if (tier === "M") tierBadgeClass = "badge-yellow";
+        else if (tier === "L") tierBadgeClass = "badge-dim";
+        else if (tier === "XL") tierBadgeClass = "badge-purple";
+
+        return `
+          <tr>
+            <td>
+              <div style="font-weight: 700; color: #f8fafc;">${escapeHtml(label)}</div>
+              <div style="display: flex; align-items: center; gap: 6px; margin-top: 4px;">
+                <span class="badge badge-purple" style="font-size: 11px;">${escapeHtml(agent)}</span>
+                <span class="text-dim text-mono" style="font-size: 11px;">(${escapeHtml(node)})</span>
+              </div>
+            </td>
+            <td>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <a href="${escapeHtml(claimUrl)}" target="_blank" class="text-cyan text-mono" style="font-size: 11.5px; text-decoration: underline; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(claimUrl)}">
+                  ${escapeHtml(claimUrl)}
+                </a>
+                <button class="btn btn-secondary btn-sm" onclick="copyToClipboard('${escapeHtml(claimUrl)}', 'Claim Link copied!')" title="Copy Claim Link">
+                  📋 Link
+                </button>
+              </div>
+            </td>
+            <td>
+              <div style="font-weight: 700;">${allocated} Keys</div>
+              <div class="text-dim" style="font-size: 11px;"><span class="${remaining > 0 ? 'text-green' : 'text-muted'}">${remaining} remaining</span></div>
+            </td>
+            <td>
+              <div style="font-size: 11px;">
+                <div>Opens: <span class="text-mono" style="color: #cbd5e1;">${escapeHtml(vFrom)}</span></div>
+                <div>Closes: <span class="text-mono" style="color: #94a3b8;">${escapeHtml(vUntil)}</span></div>
+              </div>
+            </td>
+            <td>
+              <span class="badge ${tierBadgeClass}">TIER: ${tier}</span>
+              <div class="text-dim" style="font-size: 11px; margin-top: 3px;">${budget}/${period}</div>
+            </td>
+            <td>
+              <span class="badge ${statusBadge}">${status}</span>
+            </td>
+            <td>
+              <div style="display: flex; gap: 6px; align-items: center;">
+                <button class="btn btn-sm btn-secondary" onclick="copyToClipboard('${escapeHtml(token)}', 'Claim token copied!')" title="Copy Claim Token">
+                  🔑 Token
+                </button>
+                ${status !== 'REVOKED' ? `<button class="btn btn-sm btn-danger" onclick="promptRevokeAllocation('${id}')" title="Revoke Allocation">✕ Revoke</button>` : ''}
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join("");
+    }
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="7" class="text-center text-muted">Failed to load allocations: ${err.message}</td></tr>`;
+  }
+}
+
+async function handleMintAllocation() {
+  const labelInput = document.getElementById("alloc-label");
+  const agentInput = document.getElementById("alloc-target-agent");
+  const countInput = document.getElementById("alloc-keys-count");
+  const tierInput = document.getElementById("alloc-tier");
+  const budgetInput = document.getElementById("alloc-budget");
+  const validFromInput = document.getElementById("alloc-valid-from");
+  const validUntilInput = document.getElementById("alloc-valid-until");
+  const periodInput = document.getElementById("alloc-period");
+  const nodeInput = document.getElementById("alloc-target-node");
+
+  const label = labelInput ? labelInput.value.trim() : "";
+  const agent = agentInput ? agentInput.value.trim() : "";
+  if (!label || !agent) {
+    showToast("Please provide both an Allocation Label and Target Agent", "error");
+    if (!label && labelInput) labelInput.focus();
+    else if (agentInput) agentInput.focus();
+    return;
+  }
+
+  const count = countInput ? parseInt(countInput.value) || 1 : 1;
+  const tier = tierInput ? tierInput.value || "s" : "s";
+  const budget = budgetInput ? parseFloat(budgetInput.value) || 0.25 : 0.25;
+  const vFrom = validFromInput && validFromInput.value ? new Date(validFromInput.value).toISOString() : null;
+  const vUntil = validUntilInput && validUntilInput.value ? new Date(validUntilInput.value).toISOString() : null;
+  const period = periodInput ? periodInput.value || "DAY" : "DAY";
+  const node = nodeInput ? nodeInput.value || "local" : "local";
+
+  const btn = document.getElementById("btn-confirm-mint-alloc");
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<span>⏳</span> Minting Allocation...`;
+  }
+
+  try {
+    const res = await apiFetch("/api/allocations/mint", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        label: label,
+        target_agent: agent,
+        allocated_keys_count: count,
+        valid_from: vFrom,
+        valid_until: vUntil,
+        quality_tier: tier,
+        budget_usd: budget,
+        limit_period: period,
+        target_node: node
+      })
+    });
+    const data = await res.json();
+    if (data.success && data.allocation) {
+      showToast(`Allocation minted for ${agent}! Share the Cloud DNS link.`);
+
+      const successBox = document.getElementById("alloc-success-box");
+      const urlBox = document.getElementById("alloc-result-url");
+      const tokenBox = document.getElementById("alloc-result-token");
+      const snippetBox = document.getElementById("alloc-result-mcp-snippet");
+
+      if (urlBox) urlBox.value = data.claim_url;
+      if (tokenBox) tokenBox.value = data.claim_token;
+      if (snippetBox) {
+        snippetBox.innerText = `venice_claim_allocated_key(claim_token_or_url="${data.claim_url}")`;
+      }
+      if (successBox) successBox.style.display = "block";
+      if (btn) btn.style.display = "none";
+
+      loadAllocations();
+    } else {
+      showToast(`Failed to mint allocation: ${data.error || 'Server error'}`, "error");
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, "error");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `<span>⚡</span> Mint Allocation Link`;
+    }
+  }
+}
+
+async function promptRevokeAllocation(id) {
+  if (!confirm(`Are you sure you want to revoke key allocation "${id}"? Agents will no longer be able to claim keys with this token.`)) return;
+
+  try {
+    const res = await apiFetch("/api/allocations/revoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: id })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast("Allocation revoked successfully.");
+      loadAllocations();
+    } else {
+      showToast("Failed to revoke allocation.", "error");
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, "error");
+  }
+}
+
+function copyToClipboard(text, msg = "Copied to clipboard!") {
+  if (!text) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => {
+      showToast(msg, "info");
+    }).catch(() => {
+      prompt("Copy this value manually:", text);
+    });
+  } else {
+    prompt("Copy this value manually:", text);
+  }
+}
+

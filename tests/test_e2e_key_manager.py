@@ -18,6 +18,7 @@ import shutil
 import urllib.request
 import urllib.error
 from pathlib import Path
+from core.vault import KeyVault
 
 BASE_URL = os.environ.get("TEST_BASE_URL", "http://localhost:8844")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -26,6 +27,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 def http_request(path: str, method: str = "GET", data: dict = None) -> tuple:
     url = f"{BASE_URL}{path}"
     headers = {"Content-Type": "application/json"} if data is not None else {}
+    try:
+        pairing_code = KeyVault().get_pairing_code()
+        if pairing_code:
+            headers["X-Pairing-Code"] = pairing_code
+    except Exception:
+        pass
     body = json.dumps(data).encode("utf-8") if data is not None else None
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
 
@@ -160,9 +167,13 @@ def test_5_import_valid_key_persistence():
     return key_id
 
 
-def test_6_deploy_and_revoke_key(key_id: str):
+def test_6_deploy_and_revoke_key():
     print("\n--- [E2E Test 6/7] Deploy Key (Secret Resolution) and Revocation ---")
-    # Test Deploying key by key_id
+    _, keys_res = http_request("/api/keys")
+    keys_list = keys_res.get("keys", [])
+    assert keys_list, "At least one key must exist in vault for deployment test"
+    key_id = keys_list[0].get("id")
+
     temp_config = PROJECT_ROOT / "tests" / "test_e2e_deploy_config.yaml"
     temp_config.write_text("model:\n  provider: venice\n  api_key: placeholder_old_key\n", encoding="utf-8")
 

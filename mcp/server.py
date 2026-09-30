@@ -392,6 +392,115 @@ class VeniceMCPServer:
                     "type": "object",
                     "properties": {}
                 }
+            },
+            {
+                "name": "venice_mint_allocation",
+                "description": "Mints a claimable Venice API key allocation link (https://venice.vmu.cash/claim/<token>) with specified key count, validity window, and model quality tier, without directly sharing raw secret keys with agents.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "label": {
+                            "type": "string",
+                            "description": "Descriptive label for the key allocation (e.g. 'Hermes Music Producer Key')."
+                        },
+                        "target_agent": {
+                            "type": "string",
+                            "description": "Recipient agent identifier (e.g. 'hermes-music', 'dawagent', 'a2a-node')."
+                        },
+                        "allocated_keys_count": {
+                            "type": "integer",
+                            "description": "Number of keys allocated to this claim token (default: 1)."
+                        },
+                        "valid_from": {
+                            "type": "string",
+                            "description": "Optional ISO 8601 timestamp when claiming window opens (defaults to immediate)."
+                        },
+                        "valid_until": {
+                            "type": "string",
+                            "description": "Optional ISO 8601 timestamp when claiming window closes/expires."
+                        },
+                        "quality_tier": {
+                            "type": "string",
+                            "enum": ["xs", "s", "m", "l", "xl"],
+                            "description": "Model quality tier limit for this key (default: 's')."
+                        },
+                        "budget_usd": {
+                            "type": "number",
+                            "description": "Budget consumption cap in USD (default: 0.25)."
+                        },
+                        "limit_period": {
+                            "type": "string",
+                            "enum": ["DAY", "MONTH"],
+                            "description": "Budget limit reset period (DAY or MONTH). Defaults to 'DAY'."
+                        },
+                        "target_node": {
+                            "type": "string",
+                            "description": "Target machine node ('local' or 'mcmini'). Defaults to 'local'."
+                        },
+                        "api_key": {
+                            "type": "string",
+                            "description": "Optional specific API key to allocate. Defaults to active vault key."
+                        }
+                    },
+                    "required": ["label", "target_agent"]
+                }
+            },
+            {
+                "name": "venice_inspect_allocation",
+                "description": "Inspects an allocation link or token without exposing the secret Venice API key: reveals allocated keys count, claimed count, remaining claims, validity dates, quality tier, and whether it can currently be claimed.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "claim_token_or_url": {
+                            "type": "string",
+                            "description": "Full claim URL (e.g. https://venice.vmu.cash/claim/vclm_...) or raw claim token."
+                        }
+                    },
+                    "required": ["claim_token_or_url"]
+                }
+            },
+            {
+                "name": "venice_claim_allocated_key",
+                "description": "Agent claims its allocated Venice API key using a claim link or token, validating claim schedule and remaining quota. Optionally auto-deploys to local agent config.yaml.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "claim_token_or_url": {
+                            "type": "string",
+                            "description": "Full claim URL (e.g. https://venice.vmu.cash/claim/vclm_...) or raw claim token."
+                        },
+                        "agent_id": {
+                            "type": "string",
+                            "description": "Identifier of the agent claiming the key (e.g. 'hermes-music')."
+                        },
+                        "auto_deploy": {
+                            "type": "boolean",
+                            "description": "Whether to automatically deploy claimed key to local agent configuration (default: false)."
+                        },
+                        "target_path": {
+                            "type": "string",
+                            "description": "Optional explicit configuration file path to deploy to."
+                        }
+                    },
+                    "required": ["claim_token_or_url"]
+                }
+            },
+            {
+                "name": "venice_list_allocations",
+                "description": "Lists all key allocations across the fleet with claim URLs, validity dates, remaining claims count, and status.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_agent": {
+                            "type": "string",
+                            "description": "Optional filter by target agent identifier."
+                        },
+                        "include_secret": {
+                            "type": "boolean",
+                            "description": "Whether to include raw unmasked secret keys (default: false)."
+                        }
+                    }
+                }
             }
         ]
 
@@ -602,6 +711,83 @@ class VeniceMCPServer:
                 "pairing_code": self.vault.get_pairing_code(),
                 "pairing_required": self.vault.is_pairing_required(),
                 "domain": cf.get("domain", "")
+            }
+
+        elif name == "venice_mint_allocation":
+            label = args.get("label", "")
+            target_agent = args.get("target_agent", "")
+            allocated_keys_count = args.get("allocated_keys_count", 1)
+            valid_from = args.get("valid_from")
+            valid_until = args.get("valid_until")
+            quality_tier = args.get("quality_tier", "s")
+            budget_usd = args.get("budget_usd", 0.25)
+            limit_period = args.get("limit_period", "DAY")
+            target_node = args.get("target_node", "local")
+            api_key = args.get("api_key")
+
+            alloc = self.vault.mint_allocation(
+                label=label,
+                target_agent=target_agent,
+                allocated_keys_count=allocated_keys_count,
+                valid_from=valid_from,
+                valid_until=valid_until,
+                quality_tier=quality_tier,
+                budget_usd=budget_usd,
+                limit_period=limit_period,
+                target_node=target_node,
+                api_key=api_key
+            )
+            return {
+                "success": True,
+                "allocation": alloc,
+                "claim_url": alloc["claim_url"],
+                "claim_token": alloc["claim_token"],
+                "allocated_keys_count": alloc["allocated_keys_count"],
+                "valid_from": alloc["valid_from"],
+                "valid_until": alloc["valid_until"],
+                "target_agent": alloc["target_agent"],
+                "quality_tier": alloc["quality_tier"],
+                "budget_usd": alloc["budget_usd"],
+                "message": f"Successfully minted key allocation for '{alloc['target_agent']}'. Share the claim link: {alloc['claim_url']}"
+            }
+
+        elif name == "venice_inspect_allocation":
+            token_or_url = args.get("claim_token_or_url", "")
+            return self.vault.inspect_allocation(token_or_url)
+
+        elif name == "venice_claim_allocated_key":
+            token_or_url = args.get("claim_token_or_url", "")
+            agent_id = args.get("agent_id", "")
+            auto_deploy = args.get("auto_deploy", False)
+            target_path = args.get("target_path")
+
+            claim_res = self.vault.claim_allocation(
+                token_or_url,
+                agent_id=agent_id,
+                client_info="MCP Tool venice_claim_allocated_key"
+            )
+            if not claim_res.get("success"):
+                return claim_res
+
+            if auto_deploy:
+                key_str = claim_res.get("api_key")
+                ag_name = agent_id or claim_res.get("target_agent")
+                deploy_res = ConfigDeployer.deploy_venice_key(
+                    key_str,
+                    target_path=target_path,
+                    agent_name=ag_name
+                )
+                claim_res["deployment"] = deploy_res
+            return claim_res
+
+        elif name == "venice_list_allocations":
+            target_agent = args.get("target_agent")
+            include_secret = args.get("include_secret", False)
+            allocs = self.vault.get_allocations(include_secret=include_secret, target_agent=target_agent)
+            return {
+                "success": True,
+                "total": len(allocs),
+                "allocations": allocs
             }
 
         return {"error": f"Unknown tool: {name}"}
