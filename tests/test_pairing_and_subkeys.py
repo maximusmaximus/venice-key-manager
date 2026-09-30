@@ -120,10 +120,10 @@ class TestPairingAndSubkeys(unittest.TestCase):
         mock_post.return_value.json.return_value = {"ok": True, "result": {"message_id": 101}}
 
         bot = VeniceTelegramBot(vault=self.vault)
-        bot.authorized_chat_id = "8293122782"
+        bot.authorized_chat_id = "123456789"
 
         # Test /pair_code
-        bot.handle_message({"chat": {"id": 8293122782}, "text": "/pair_code"})
+        bot.handle_message({"chat": {"id": 123456789}, "text": "/pair_code"})
         mock_post.assert_called()
         call_payload = mock_post.call_args[1]["json"]
         self.assertIn("TEST-PAIR-9999", call_payload["text"])
@@ -136,7 +136,7 @@ class TestPairingAndSubkeys(unittest.TestCase):
             "period": "DAY",
             "quality_tier": "xs"
         })
-        bot.handle_message({"chat": {"id": 8293122782}, "text": "/subkeys"})
+        bot.handle_message({"chat": {"id": 123456789}, "text": "/subkeys"})
         call_payload = mock_post.call_args[1]["json"]
         self.assertIn("Hermes Subkey", call_payload["text"])
         self.assertIn("0.25", call_payload["text"])

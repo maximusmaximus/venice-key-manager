@@ -290,19 +290,19 @@ sudo systemctl enable --now venice-key-manager.service
 
 ## 🌐 Multi-Node Fleet Federation & A2A Synchronization
 
-Venice Key Manager natively supports federated multi-machine operation across Tailscale Agent2Agent (A2A) networks (such as primary Windows workstation `planetaryexplorer`, Apple Silicon macOS **`mcmini`**, and remote Linux nodes).
+Venice Key Manager natively supports federated multi-machine operation across Tailscale Agent2Agent (A2A) networks (such as primary Windows workstation, Apple Silicon macOS **`mcmini`**, and remote Linux nodes).
 
 ```mermaid
 flowchart LR
-    subgraph PrimaryNode["Host Node: planetaryexplorer (Windows)"]
+    subgraph PrimaryNode["Host Node: Workstation (Windows)"]
         Dashboard["🖥️ Web Dashboard (Port 8844)"]
-        TGBot["🤖 Telegram Bot (@songprocessor_bot)"]
+        TGBot["🤖 Telegram Bot (@your_agent_bot)"]
         LocalVault["🔒 venice_vault.json\n(Node-Local Admin Key)"]
         LocalMesh["FleetMeshManager"]
     end
 
     subgraph PeerNode["Peer Node: mcmini (macOS)"]
-        McMiniService["⚡ Venice Key Manager\n(Port 8844 @ 100.118.227.19)"]
+        McMiniService["⚡ Venice Key Manager\n(Port 8844 @ Tailscale IP)"]
         McMiniVault["🔒 venice_vault.json\n(Node-Local Admin Key)"]
         McMiniAgents["Autonomous Agents\n(Local Configs)"]
     end
@@ -325,7 +325,7 @@ flowchart LR
 ### 🔒 Key Architectural Rule: Zero Credential Propagation
 * **Node-Local Isolation**: Each machine maintains its own independent `venice_vault.json` containing its node-local Venice Admin Key and agent tokens.
 * **Never Synced Over Git**: `venice_vault.json` and `.env` are strictly `.gitignore`'d and are **never** committed or synced across nodes.
-* **Mesh Request Proxying**: When Machine A (e.g. Host) configures or triggers a key on Machine B (e.g. `mcmini`), Machine A forwards the request over the encrypted Tailscale mesh (`http://100.118.227.19:8844`). Machine B issues keys locally using its own Admin key and writes to its local agent configs. Admin keys never leave their host machine!
+* **Mesh Request Proxying**: When Machine A (e.g. Host) configures or triggers a key on Machine B (e.g. `mcmini`), Machine A forwards the request over the encrypted Tailscale mesh (`http://<peer-tailscale-ip>:8844`). Machine B issues keys locally using its own Admin key and writes to its local agent configs. Admin keys never leave their host machine!
 
 ---
 
@@ -357,7 +357,7 @@ Create or update `venice_vault.json` with that machine's node-local configuratio
     "tunnel_token": ""
   },
   "telegram": {
-    "authorized_chat_id": "8293122782"
+    "authorized_chat_id": "<your-telegram-chat-id>"
   },
   "keys": [],
   "subkeys": []
@@ -390,7 +390,7 @@ python3 run.py --all
 nohup python3 run.py --all > venice_manager.log 2>&1 &
 ```
 
-**On Windows (`planetaryexplorer`)**:
+**On Windows (Host Workstation)**:
 ```powershell
 python run.py --all
 ```
@@ -398,7 +398,7 @@ python run.py --all
 #### 4. Verify Service & Tailscale Pairing
 Once running on the new node, verify it responds on the Tailscale network:
 ```bash
-curl http://100.118.227.19:8844/api/version
+curl http://<peer-tailscale-ip>:8844/api/version
 ```
 Output:
 ```json
@@ -416,7 +416,7 @@ Output:
 In the Web Dashboard (`http://localhost:8844`):
 1. Navigate to the **🌐 A2A Fleet Mesh** tab.
 2. Click **➕ Pair New Machine**.
-3. Enter Identifier (`mcmini`), Tailscale Base URL (`http://100.118.227.19:8844`), and Display Label (`McMini macOS`).
+3. Enter Identifier (`mcmini`), Tailscale Base URL (`http://<peer-tailscale-ip>:8844`), and Display Label (`McMini macOS`).
 4. Click **Save & Pair Node**.
 
 ---
@@ -587,7 +587,7 @@ flowchart TD
 ### 2. Cross-Platform 1-Click Boot Installation
 Auto-start on boot is supported across all major operating systems out of the box:
 
-#### 🪟 Windows Workstation (`planetaryexplorer`)
+#### 🪟 Windows Workstation
 Installs a silent VBScript in the Windows Startup folder and integrates with the A2A fleet launcher. Runs completely in the background without any CMD window popups:
 ```powershell
 # 1-Click PowerShell Installer

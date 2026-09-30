@@ -30,10 +30,10 @@ DEFAULT_FLEET_NODES = {
     "mcmini": {
         "name": "mcmini",
         "label": "McMini Node (Tailscale)",
-        "ip": "100.118.227.19",
-        "dns": "mcmini.tail24df4e.ts.net",
-        "port": 8844,
-        "base_url": "http://100.118.227.19:8844",
+        "ip": os.environ.get("MCMINI_TAILSCALE_IP", "100.64.0.2"),
+        "dns": os.environ.get("MCMINI_TAILSCALE_DNS", "mcmini.tailnet.ts.net"),
+        "port": int(os.environ.get("MCMINI_PORT", "8844")),
+        "base_url": os.environ.get("MCMINI_URL", "http://100.64.0.2:8844"),
         "os": "darwin/windows",
         "is_self": False
     }

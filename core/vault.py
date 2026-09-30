@@ -378,24 +378,31 @@ class KeyVault:
 
         # Ensure defaults for pairing & domain
         if not security.get("pairing_code"):
-            security["pairing_code"] = "VK-AB67CA09"
+            security["pairing_code"] = os.environ.get("VENICE_PAIRING_CODE", "VK-AB67CA09")
             changed = True
         if not cloudflare.get("domain"):
-            cloudflare["domain"] = "venice.vmu.cash"
+            cloudflare["domain"] = os.environ.get("VENICE_CLOUDFLARE_DOMAIN", "venice.vmu.cash")
             changed = True
 
-        # Ensure agent_bots has hermes-music if bot_token is known
+        # Ensure agent_bots has primary agent if bot_token is known
         bots = telegram.setdefault("agent_bots", {})
-        if telegram.get("master_bot_token") and "hermes-music" not in bots:
-            bots["hermes-music"] = {
-                "agent_name": "hermes-music",
-                "bot_token": telegram["master_bot_token"],
-                "bot_id": 8973378387,
-                "username": "songprocessor_bot",
-                "first_name": "songprocessor",
-                "config_path": str(KNOWN_CONFIG_PATHS[0]),
+        token = telegram.get("master_bot_token", "")
+        if token and not bots:
+            bot_id_num = None
+            if ":" in token:
+                try:
+                    bot_id_num = int(token.split(":")[0])
+                except Exception:
+                    pass
+            bots["primary-agent"] = {
+                "agent_name": "primary-agent",
+                "bot_token": token,
+                "bot_id": bot_id_num or 0,
+                "username": "agent_bot",
+                "first_name": "Agent",
+                "config_path": str(KNOWN_CONFIG_PATHS[0]) if KNOWN_CONFIG_PATHS else "config.yaml",
                 "created_at": datetime.utcnow().isoformat() + "Z",
-                "notes": "Primary Hermes music & publishing bot"
+                "notes": "Primary agent bot"
             }
             changed = True
 
@@ -705,8 +712,16 @@ class KeyVault:
     def get_telegram_master_token(self) -> str:
         return os.environ.get("TELEGRAM_BOT_TOKEN") or self.data.get("telegram", {}).get("master_bot_token", "")
 
+    def set_telegram_master_token(self, token: str) -> None:
+        self.data.setdefault("telegram", {})["master_bot_token"] = token
+        self._save(force=True, create_snapshot=True)
+
     def get_authorized_chat_id(self) -> str:
         return str(os.environ.get("TELEGRAM_CHAT_ID") or self.data.get("telegram", {}).get("authorized_chat_id", ""))
+
+    def set_authorized_chat_id(self, chat_id: str) -> None:
+        self.data.setdefault("telegram", {})["authorized_chat_id"] = str(chat_id)
+        self._save(force=True, create_snapshot=True)
 
     def get_agent_bots(self) -> Dict[str, Dict[str, Any]]:
         return self.data.get("telegram", {}).get("agent_bots", {})

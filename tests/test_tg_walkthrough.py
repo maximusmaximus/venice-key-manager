@@ -55,7 +55,7 @@ def run_tg_walkthrough_tests():
     bot.send_message = mock_send_message
     bot.answer_callback = MagicMock()
 
-    test_chat_id = bot.authorized_chat_id or "8293122782"
+    test_chat_id = bot.authorized_chat_id or "123456789"
     bot.authorized_chat_id = test_chat_id
 
     # [Test 1] Main Menu Keyboard

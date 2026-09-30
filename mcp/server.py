@@ -299,7 +299,7 @@ class VeniceMCPServer:
                         },
                         "base_url": {
                             "type": "string",
-                            "description": "Base URL of the machine's Venice Key Manager service (e.g. 'http://100.118.227.19:8844')."
+                            "description": "Base URL of the machine's Venice Key Manager service (e.g. 'http://100.64.0.2:8844')."
                         },
                         "label": {
                             "type": "string",

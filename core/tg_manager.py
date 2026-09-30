@@ -71,6 +71,15 @@ class TelegramAgentManager:
             data = resp.json()
             if resp.status_code == 200 and data.get("ok"):
                 return {"success": True, "message_id": data.get("result", {}).get("message_id")}
+            # Fallback to plain text if Markdown parsing fails due to unescaped entities
+            if "can't parse entities" in data.get("description", "").lower():
+                resp2 = requests.post(url, json={
+                    "chat_id": target_chat,
+                    "text": msg_text
+                }, timeout=10)
+                data2 = resp2.json()
+                if resp2.status_code == 200 and data2.get("ok"):
+                    return {"success": True, "message_id": data2.get("result", {}).get("message_id")}
             return {"success": False, "error": data.get("description", resp.text)}
         except Exception as e:
             return {"success": False, "error": str(e)}

@@ -124,8 +124,12 @@ class VeniceTelegramBot:
                     {"text": "📥 Sync Fleet Git", "callback_data": "act_sync_fleet"}
                 ],
                 [
+                    {"text": "🎟️ Agent Sub-Keys", "callback_data": "menu_subkeys"},
+                    {"text": "🌐 Claim Allocations", "callback_data": "menu_allocations"}
+                ],
+                [
                     {"text": "🔒 Pairing Code", "callback_data": "menu_pair_code"},
-                    {"text": "🎟️ Agent Sub-Keys", "callback_data": "menu_subkeys"}
+                    {"text": "🛡️ Auto-Restart & Daemon", "callback_data": "menu_service"}
                 ],
                 [
                     {"text": "💾 Backup Vault", "callback_data": "act_backup_vault"},
@@ -133,9 +137,6 @@ class VeniceTelegramBot:
                 ],
                 [
                     {"text": "📊 Model Limits", "callback_data": "menu_limits"},
-                    {"text": "🛡️ Auto-Restart & Daemon", "callback_data": "menu_service"}
-                ],
-                [
                     {"text": "🔄 Refresh Dashboard", "callback_data": "menu_main"}
                 ]
             ]
@@ -338,9 +339,8 @@ class VeniceTelegramBot:
         # Wizard Step 3: Tier Specs & Budget Cap Selection
         elif data.startswith("wiz_tier_"):
             self.answer_callback(cb_id)
-            parts = data.split("_")
-            agent = parts[2]
-            tier = parts[3]
+            rest = data[len("wiz_tier_"):]
+            agent, tier = rest.rsplit("_", 1)
             t_info = MODEL_TIER_MAPPING.get(tier, {})
 
             txt = (
@@ -376,10 +376,9 @@ class VeniceTelegramBot:
         # Wizard Step 4: Issue / Generate Key
         elif data.startswith("wiz_do_"):
             self.answer_callback(cb_id, "Provisioning key...")
-            parts = data.split("_")
-            agent = parts[2]
-            tier = parts[3]
-            limit_val = float(parts[4]) if len(parts) > 4 and parts[4] != "0" else None
+            rest = data[len("wiz_do_"):]
+            agent, tier, limit_str = rest.rsplit("_", 2)
+            limit_val = float(limit_str) if limit_str != "0" else None
             t_info = MODEL_TIER_MAPPING.get(tier, {})
             admin_key = self.vault.get_venice_admin_key()
 
@@ -444,10 +443,9 @@ class VeniceTelegramBot:
         # Bind active key to agent with tier limit
         elif data.startswith("wiz_bind_"):
             self.answer_callback(cb_id, "Binding active key...")
-            parts = data.split("_")
-            agent = parts[2]
-            tier = parts[3]
-            limit_val = float(parts[4]) if len(parts) > 4 and parts[4] != "0" else None
+            rest = data[len("wiz_bind_"):]
+            agent, tier, limit_str = rest.rsplit("_", 2)
+            limit_val = float(limit_str) if limit_str != "0" else None
             t_info = MODEL_TIER_MAPPING.get(tier, {})
 
             active_key = self.vault.get_active_venice_key()
@@ -759,6 +757,148 @@ class VeniceTelegramBot:
                 txt = f"❌ *Restart Signal Failed*: `{res.get('error')}`"
             self.edit_message(chat_id, msg_id, txt, reply_markup=self.back_to_main_keyboard())
 
+        elif data == "menu_allocations":
+            self.answer_callback(cb_id)
+            allocations = self.vault.get_allocations()
+            if allocations:
+                txt = f"🌐 *Agent Key Allocations ({len(allocations)})*:\n\n"
+                for al in allocations[:6]:
+                    lbl = al.get("label", "Allocation")
+                    st = al.get("status", "ACTIVE")
+                    rem = al.get("remaining_claims", 0)
+                    tot = al.get("allocated_keys_count", 1)
+                    ag = al.get("target_agent", "Any")
+                    url = al.get("claim_url", "")
+                    tok = al.get("claim_token", "")
+                    tier = (al.get("quality_tier") or "s").upper()
+                    txt += f"• *{lbl}* `[{st}]` `[TIER: {tier}]`\n  Agent: `{ag}` | Claims: `{tot - rem}/{tot}`\n  Link: `{url}`\n  Token: `{tok}`\n\n"
+            else:
+                txt = (
+                    "🌐 *Agent Key Allocations (`venice.vmu.cash/claim/...`)*\n\n"
+                    "No allocations minted yet. You can mint a link with a quota and validity schedule to share with an agent without exposing your secret API key."
+                )
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "➕ Mint Allocation Link", "callback_data": "wiz_alloc_agent"}],
+                    [{"text": "« Back to Main Dashboard", "callback_data": "menu_main"}]
+                ]
+            }
+            self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
+
+        # Allocation Wizard Step 1: Agent Selection
+        elif data == "wiz_alloc_agent":
+            self.answer_callback(cb_id)
+            txt = (
+                "🌐 *Mint Allocation Link* (Step 1/3)\n\n"
+                "Select which agent will receive this allocation link:"
+            )
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🎵 hermes-music", "callback_data": "wiz_alloc_for_hermes-music"},
+                        {"text": "🌐 a2a-node", "callback_data": "wiz_alloc_for_a2a-node"}
+                    ],
+                    [
+                        {"text": "🎧 dawagent", "callback_data": "wiz_alloc_for_dawagent"},
+                        {"text": "🤖 v3n15PE_bot", "callback_data": "wiz_alloc_for_v3n15PE_bot"}
+                    ],
+                    [
+                        {"text": "⚙️ custom-agent", "callback_data": "wiz_alloc_for_custom-agent"}
+                    ],
+                    [
+                        {"text": "« Back to Allocations", "callback_data": "menu_allocations"}
+                    ]
+                ]
+            }
+            self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
+
+        # Allocation Wizard Step 2: Quality Tier Selection
+        elif data.startswith("wiz_alloc_for_"):
+            self.answer_callback(cb_id)
+            agent = data[len("wiz_alloc_for_"):]
+            txt = (
+                f"🌐 *Mint Allocation Link* (Step 2/3)\n\n"
+                f"• *Target Agent*: `{agent}`\n\n"
+                f"Select model quality tier allocated to this agent:"
+            )
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "🟣 XS: Ultra-Fast (1B-3B)", "callback_data": f"wiz_alloc_tier_{agent}_xs"}],
+                    [{"text": "🟢 S: Efficient (Flash, 8B-14B - Default)", "callback_data": f"wiz_alloc_tier_{agent}_s"}],
+                    [{"text": "🟡 M: Balanced (70B, Coding)", "callback_data": f"wiz_alloc_tier_{agent}_m"}],
+                    [{"text": "🔵 L: Reasoning (R1, 72B)", "callback_data": f"wiz_alloc_tier_{agent}_l"}],
+                    [{"text": "🔴 XL: Flagship 405B+", "callback_data": f"wiz_alloc_tier_{agent}_xl"}],
+                    [{"text": "« Back to Agents", "callback_data": "wiz_alloc_agent"}]
+                ]
+            }
+            self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
+
+        # Allocation Wizard Step 3: Allocated Keys Count
+        elif data.startswith("wiz_alloc_tier_"):
+            self.answer_callback(cb_id)
+            rest = data[len("wiz_alloc_tier_"):]
+            agent, tier = rest.rsplit("_", 1)
+            t_info = MODEL_TIER_MAPPING.get(tier, {})
+            txt = (
+                f"🌐 *Mint Allocation Link* (Step 3/3)\n\n"
+                f"• *Target Agent*: `{agent}`\n"
+                f"• *Quality Tier*: `{tier.upper()}` ({t_info.get('label')})\n\n"
+                f"Select how many key claims to allocate for this agent:"
+            )
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🎟️ 1 Key Claim", "callback_data": f"wiz_alloc_do_{agent}_{tier}_1"},
+                        {"text": "🎟️ 3 Key Claims", "callback_data": f"wiz_alloc_do_{agent}_{tier}_3"}
+                    ],
+                    [
+                        {"text": "🎟️ 5 Key Claims", "callback_data": f"wiz_alloc_do_{agent}_{tier}_5"},
+                        {"text": "🎟️ 10 Key Claims", "callback_data": f"wiz_alloc_do_{agent}_{tier}_10"}
+                    ],
+                    [
+                        {"text": "« Back to Quality Tiers", "callback_data": f"wiz_alloc_for_{agent}"}
+                    ]
+                ]
+            }
+            self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
+
+        # Allocation Wizard Execution: Mint
+        elif data.startswith("wiz_alloc_do_"):
+            self.answer_callback(cb_id, "Minting allocation link...")
+            rest = data[len("wiz_alloc_do_"):]
+            agent, tier, count_str = rest.rsplit("_", 2)
+            count = int(count_str) if count_str.isdigit() else 1
+
+            res = self.vault.mint_allocation(
+                label=f"{agent} ({tier.upper()} Tier)",
+                target_agent=agent,
+                allocated_keys_count=count,
+                quality_tier=tier,
+                budget_usd=0.25
+            )
+            if res and res.get("claim_url"):
+                claim_url = res.get("claim_url", "")
+                claim_token = res.get("claim_token", "")
+                txt = (
+                    f"✅ *Agent Allocation Link Minted!*\n\n"
+                    f"• *Target Agent*: `{agent}`\n"
+                    f"• *Tier Limit*: `{tier.upper()}`\n"
+                    f"• *Claims Allowed*: `{count}`\n\n"
+                    f"🔗 *Cloud DNS Link*:\n`{claim_url}`\n\n"
+                    f"🔑 *Claim Token*:\n`{claim_token}`\n\n"
+                    f"Share this link with your agent. The agent can claim keys via MCP tool `venice_claim_allocated_key` or via the web portal."
+                )
+            else:
+                txt = f"❌ *Failed to mint allocation*: `{res.get('error')}`"
+
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "🌐 View All Allocations", "callback_data": "menu_allocations"}],
+                    [{"text": "« Main Dashboard", "callback_data": "menu_main"}]
+                ]
+            }
+            self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
+
     # --- Message Command Handlers ---
 
     def handle_message(self, msg: Dict[str, Any]):
@@ -809,6 +949,24 @@ class VeniceTelegramBot:
                     txt += f"• *{lbl}* `[TIER: {tier}]` Cap: `${b:.2f}/{per}`\n  Agent: `{ag}` ({nd}) | ID: `{sk.get('id')}`\n"
             else:
                 txt = "🎟️ *Agent Sub-Keys*: No sub-keys currently recorded."
+            self.send_message(chat_id, txt)
+
+        elif text.startswith("/allocations"):
+            allocations = self.vault.get_allocations()
+            if allocations:
+                txt = f"🌐 *Agent Key Allocations ({len(allocations)})*:\n\n"
+                for al in allocations[:10]:
+                    lbl = al.get("label", "Allocation")
+                    st = al.get("status", "ACTIVE")
+                    rem = al.get("remaining_claims", 0)
+                    tot = al.get("allocated_keys_count", 1)
+                    ag = al.get("target_agent", "Any")
+                    url = al.get("claim_url", "")
+                    tok = al.get("claim_token", "")
+                    tier = (al.get("quality_tier") or "s").upper()
+                    txt += f"• *{lbl}* `[{st}]` `[TIER: {tier}]`\n  Agent: `{ag}` | Claims: `{tot - rem}/{tot}`\n  Link: `{url}`\n  Token: `{tok}`\n\n"
+            else:
+                txt = "🌐 *Agent Key Allocations*: No allocations currently minted."
             self.send_message(chat_id, txt)
 
         elif text.startswith("/balance"):
