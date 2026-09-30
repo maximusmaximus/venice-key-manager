@@ -201,26 +201,36 @@ async function checkPairingStatus() {
 
 function updatePairingUI(isPaired) {
   const guestGate = document.getElementById("guest-gate-card");
+  const authView = document.getElementById("authenticated-view");
   const lblPair = document.getElementById("lbl-pairing-status");
   const iconPair = document.getElementById("icon-pair-status");
   const domainBadge = document.getElementById("gate-domain-badge");
+  const nodeSwitcher = document.querySelector(".node-switcher-group");
+  const btnSync = document.getElementById("btn-sync-code");
+  const btnRefresh = document.getElementById("btn-refresh");
 
   if (domainBadge && appState.domain) {
     domainBadge.innerText = appState.domain.toUpperCase();
   }
 
-  if (guestGate) {
-    guestGate.style.display = isPaired ? "none" : "block";
-  }
-
-  if (lblPair && iconPair) {
-    if (isPaired) {
-      lblPair.innerText = "Paired (Click to Unpair)";
-      iconPair.innerText = "🔓";
-    } else {
-      lblPair.innerText = "Pair Machine";
-      iconPair.innerText = "🔒";
-    }
+  if (isPaired) {
+    if (guestGate) guestGate.style.display = "none";
+    if (authView) authView.style.display = "block";
+    if (nodeSwitcher) nodeSwitcher.style.display = "flex";
+    if (btnSync) btnSync.style.display = "inline-flex";
+    if (btnRefresh) btnRefresh.style.display = "inline-flex";
+    if (lblPair) lblPair.innerText = "Paired (Click to Unpair)";
+    if (iconPair) iconPair.innerText = "🔓";
+  } else {
+    // When NOT logged in: strictly hide all administrative features
+    // Only the standalone Key Validation portal is visible
+    if (guestGate) guestGate.style.display = "block";
+    if (authView) authView.style.display = "none";
+    if (nodeSwitcher) nodeSwitcher.style.display = "none";
+    if (btnSync) btnSync.style.display = "none";
+    if (btnRefresh) btnRefresh.style.display = "none";
+    if (lblPair) lblPair.innerText = "Log In / Pair Machine";
+    if (iconPair) iconPair.innerText = "🔑";
   }
 }
 
@@ -238,12 +248,8 @@ async function refreshAll() {
       loadFleetNodes()
     ]);
   } else {
-    // If not authenticated, load public fleet probes and clear sensitive tables
-    await loadFleetNodes();
-    await loadStats();
-    await loadKeys();
-    await loadSubkeys();
-    await loadAgentBots();
+    // Guest mode: Only key validation feature is active.
+    // Zero administrative or private fleet endpoints are queried.
   }
 }
 
@@ -1449,6 +1455,15 @@ function initPairingAndSubkeys() {
   if (inputGuest) {
     inputGuest.addEventListener("keydown", (e) => {
       if (e.key === "Enter") handleGuestValidateKey();
+    });
+  }
+
+  const btnToggleGuestPw = document.getElementById("btn-toggle-guest-pw");
+  if (btnToggleGuestPw && inputGuest) {
+    btnToggleGuestPw.addEventListener("click", () => {
+      const isPw = inputGuest.type === "password";
+      inputGuest.type = isPw ? "text" : "password";
+      btnToggleGuestPw.innerText = isPw ? "🙈" : "👁️";
     });
   }
 

@@ -6,14 +6,8 @@ import sys
 import io
 import time
 import requests
+import unittest
 from pathlib import Path
-
-# Fix Windows console UTF-8 encoding
-if hasattr(sys.stdout, "buffer") and not getattr(sys.stdout, "closed", False):
-    try:
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    except Exception:
-        pass
 
 # Add project root
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -21,68 +15,69 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from web.server import start_web_server
+from core.vault import KeyVault
 
 
-def test_web_server():
-    print("[1/4] Starting Web Server daemon on port 8899...")
-    server = start_web_server(port=8899, daemon=True)
-    time.sleep(1)
+class TestWebServer(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server = start_web_server(port=8899, daemon=True)
+        time.sleep(0.5)
 
-    print("[2/4] Testing Public Gate and Pairing Security...")
-    r_html = requests.get("http://localhost:8899/")
-    assert r_html.status_code == 200
-    assert "VENICE // TG ENGINE" in r_html.text
-    print("  [+] Static HTML successfully served.")
+    @classmethod
+    def tearDownClass(cls):
+        try:
+            cls.server.shutdown()
+            cls.server.server_close()
+        except Exception:
+            pass
 
-    r_pub = requests.get("http://localhost:8899/api/pairing_status")
-    assert r_pub.status_code == 200
-    assert r_pub.json().get("requires_pairing") is True
-    print("  [+] Public endpoint /api/pairing_status returns HTTP 200.")
+    def test_01_public_gate_and_guest_isolation(self):
+        r_html = requests.get("http://127.0.0.1:8899/")
+        self.assertEqual(r_html.status_code, 200)
+        self.assertIn("VENICE // TG ENGINE", r_html.text)
+        self.assertIn('id="authenticated-view"', r_html.text)
+        self.assertIn('id="guest-gate-card"', r_html.text)
+        self.assertIn('id="input-guest-key"', r_html.text)
+        self.assertIn('btn-guest-validate-key', r_html.text)
 
-    # Unauthenticated /api/stats should be gated with 401
-    r_unauth = requests.get("http://localhost:8899/api/stats")
-    assert r_unauth.status_code == 401
-    print("  [+] Protected Mode Gate verified: Unpaired requests return 401.")
+        r_pub = requests.get("http://127.0.0.1:8899/api/pairing_status")
+        self.assertEqual(r_pub.status_code, 200)
+        self.assertTrue(r_pub.json().get("requires_pairing"))
 
-    print("[3/4] Testing Authenticated Requests & Vault APIs...")
-    from core.vault import KeyVault
-    vault = KeyVault()
-    pairing_code = vault.get_pairing_code()
-    headers = {"X-Pairing-Code": pairing_code}
+        # Unauthenticated privileged endpoints must strictly return 401
+        self.assertEqual(requests.get("http://127.0.0.1:8899/api/stats").status_code, 401)
+        self.assertEqual(requests.get("http://127.0.0.1:8899/api/keys").status_code, 401)
+        self.assertEqual(requests.get("http://127.0.0.1:8899/api/subkeys").status_code, 401)
+        self.assertEqual(requests.get("http://127.0.0.1:8899/api/vault/status").status_code, 401)
 
-    r_stats = requests.get("http://localhost:8899/api/stats", headers=headers)
-    assert r_stats.status_code == 200
-    data = r_stats.json()
-    assert data.get("success")
-    print(f"  [+] /api/stats response: USD={data.get('balances', {}).get('USD')}, Tier={data.get('apiTier', {}).get('id')}")
+        # Public candidate key validator must be accessible without pairing
+        r_val = requests.post("http://127.0.0.1:8899/api/validate_key", json={"api_key": ""})
+        self.assertEqual(r_val.status_code, 400)
 
-    r_vault_status = requests.get("http://localhost:8899/api/vault/status", headers=headers)
-    assert r_vault_status.status_code == 200
-    v_st = r_vault_status.json()
-    assert v_st.get("success")
-    assert v_st.get("backup_mirror_exists") is True
-    print(f"  [+] /api/vault/status verified: Backup Mirror Active, Snapshots={v_st.get('total_snapshots')}.")
+    def test_02_authenticated_endpoints(self):
+        vault = KeyVault()
+        pairing_code = vault.get_pairing_code()
+        headers = {"X-Pairing-Code": pairing_code}
 
-    r_backups = requests.get("http://localhost:8899/api/vault/backups", headers=headers)
-    assert r_backups.status_code == 200
-    assert "backups" in r_backups.json()
-    print(f"  [+] /api/vault/backups returned {len(r_backups.json().get('backups'))} snapshots.")
+        r_stats = requests.get("http://127.0.0.1:8899/api/stats", headers=headers)
+        self.assertEqual(r_stats.status_code, 200)
+        self.assertTrue(r_stats.json().get("success"))
 
-    print("[4/4] Querying /api/agent_bots and /api/keys...")
-    r_bots = requests.get("http://localhost:8899/api/agent_bots", headers=headers)
-    assert r_bots.status_code == 200
-    bots_data = r_bots.json()
-    assert bots_data.get("success")
-    print(f"  [+] /api/agent_bots returned {len(bots_data.get('agent_bots', []))} bots.")
+        r_vault_status = requests.get("http://127.0.0.1:8899/api/vault/status", headers=headers)
+        self.assertEqual(r_vault_status.status_code, 200)
+        self.assertTrue(r_vault_status.json().get("backup_mirror_exists"))
 
-    r_keys = requests.get("http://localhost:8899/api/keys", headers=headers)
-    assert r_keys.status_code == 200
-    print("  [+] /api/keys returned HTTP 200.")
+        r_backups = requests.get("http://127.0.0.1:8899/api/vault/backups", headers=headers)
+        self.assertEqual(r_backups.status_code, 200)
+        self.assertIn("backups", r_backups.json())
 
-    server.shutdown()
-    print("  [+] Web Server daemon cleanly stopped.")
+        r_bots = requests.get("http://127.0.0.1:8899/api/agent_bots", headers=headers)
+        self.assertEqual(r_bots.status_code, 200)
+
+        r_keys = requests.get("http://127.0.0.1:8899/api/keys", headers=headers)
+        self.assertEqual(r_keys.status_code, 200)
 
 
 if __name__ == "__main__":
-    test_web_server()
-    print("\nALL WEB SERVER TESTS PASSED!")
+    unittest.main()

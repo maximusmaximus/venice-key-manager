@@ -664,3 +664,35 @@ body {
 .text-center { text-align: center; }
 .text-muted { color: var(--text-muted); }
 .text-mono { font-family: var(--font-mono); }
+
+/* Guest Key Validation Portal */
+.guest-portal-card {
+  max-width: 820px;
+  margin: 30px auto;
+  border: 1px solid var(--accent-purple);
+  background: linear-gradient(180deg, rgba(20, 24, 37, 0.98), rgba(12, 14, 22, 0.99));
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5), 0 0 30px rgba(139, 92, 246, 0.12);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+}
+
+.guest-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+}
+
+.guest-toggle-pw {
+  position: absolute;
+  right: 12px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.guest-toggle-pw:hover {
+  color: var(--text-main);
+}

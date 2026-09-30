@@ -46,40 +46,55 @@
     </header>
 
     <!-- Guest Mode / Public Key Validator Gate -->
-    <section id="guest-gate-card" class="card" style="margin-bottom: 24px; border: 1px solid var(--accent-purple); background: linear-gradient(180deg, rgba(18, 21, 31, 0.98), rgba(10, 12, 18, 0.99)); display: none;">
-      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+    <section id="guest-gate-card" class="guest-portal-card" style="display: none;">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; flex-wrap: wrap; gap: 14px; border-bottom: 1px solid var(--border-color); padding-bottom: 18px;">
         <div>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 20px;">🔒</span>
-            <h2 style="font-size: 18px; font-weight: 700; color: var(--text-main);">Protected Node Gate</h2>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="font-size: 24px;">⚡</span>
+            <h2 style="font-size: 20px; font-weight: 800; letter-spacing: -0.5px; color: var(--text-main);">Venice API Key Validator & Inspection Portal</h2>
             <span class="badge badge-purple" id="gate-domain-badge">PUBLIC ACCESS</span>
           </div>
-          <p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
-            This node is in Protected Mode. Unpaired visitors can ingest & validate Venice API keys below. Node administrators must enter the secure pairing code to unlock full fleet management and agent deployment.
+          <p style="font-size: 13.5px; color: var(--text-muted); margin-top: 6px; line-height: 1.5;">
+            Inspect and validate any Venice.ai API key live. Check USD balance, DIEM token balance, bundled credits, model quality tier clearance, and live inference latency with zero credentials saved to disk.
           </p>
         </div>
-        <button class="btn btn-primary btn-sm" id="btn-open-pair-modal">
-          <span>🔑</span> Enter Pairing Code
-        </button>
       </div>
 
-      <!-- Guest Key Ingestion & Balance Sandbox -->
-      <div style="background: var(--bg-input); border-radius: var(--radius-md); padding: 16px; border: 1px solid var(--border-color);">
-        <label style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px; display: block; margin-bottom: 8px;">
-          ⚡ Ingest & Validate Venice API Key
+      <!-- Key Input Box -->
+      <div style="background: var(--bg-input); border-radius: var(--radius-md); padding: 20px; border: 1px solid var(--border-color);">
+        <label style="font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px; display: block; margin-bottom: 8px;">
+          🔑 Enter Venice.ai API Key
         </label>
-        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-          <input type="password" id="input-guest-key" class="input-field" placeholder="Paste your Venice API key to test live status and balances..." style="flex: 1; min-width: 280px;" autocomplete="off">
-          <button class="btn btn-primary" id="btn-guest-validate-key">
+        <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+          <div class="guest-input-wrap" style="flex: 1; min-width: 280px; position: relative;">
+            <input type="password" id="input-guest-key" class="input-field" placeholder="Paste your Venice API key here..." style="width: 100%; padding-right: 40px;" autocomplete="off">
+            <button type="button" id="btn-toggle-guest-pw" class="guest-toggle-pw" title="Toggle key visibility">👁️</button>
+          </div>
+          <button class="btn btn-primary" id="btn-guest-validate-key" style="white-space: nowrap;">
             <span>⚡</span> Test & Validate Key
           </button>
         </div>
-        <div id="guest-validate-result" style="margin-top: 14px; display: none;"></div>
+        <div id="guest-validate-result" style="margin-top: 16px; display: none;"></div>
+      </div>
+
+      <!-- Node Administrator Footer Banner -->
+      <div style="margin-top: 24px; padding: 14px 18px; background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: var(--radius-md); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 18px;">🔒</span>
+          <div style="font-size: 13px; color: var(--text-muted);">
+            <strong style="color: var(--text-main);">Node Administrator Access:</strong> To manage fleet keys, deploy autonomous agents, or mint sub-keys, enter your secure machine pairing code.
+          </div>
+        </div>
+        <button class="btn btn-secondary btn-sm" id="btn-open-pair-modal" style="white-space: nowrap;">
+          <span>🔑</span> Enter Pairing Code
+        </button>
       </div>
     </section>
 
-    <!-- Real-time Stats Grid -->
-    <section class="stats-grid">
+    <!-- Authenticated / Paired Management Suite (Only visible to logged-in users) -->
+    <div id="authenticated-view" style="display: none;">
+      <!-- Real-time Stats Grid -->
+      <section class="stats-grid">
       <div class="stat-card">
         <div class="stat-header">
           <span class="stat-label">VENICE USD BALANCE</span>
@@ -502,7 +517,8 @@
         </table>
       </div>
     </main>
-  </div>
+    </div> <!-- /#authenticated-view -->
+  </div> <!-- /.app-container -->
 
   <!-- Modal: Add & Issue Venice Key -->
   <div class="modal-overlay" id="modal-create-key">

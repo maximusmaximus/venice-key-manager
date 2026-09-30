@@ -678,7 +678,10 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
 def start_web_server(host: str = "0.0.0.0", port: int = 8844, daemon: bool = False) -> ThreadingHTTPServer:
     server_address = (host, port)
     httpd = ThreadingHTTPServer(server_address, DashboardRequestHandler)
-    print(f"⚡ Venice & Telegram Key Management Dashboard running at http://localhost:{port}")
+    try:
+        print(f"⚡ Venice & Telegram Key Management Dashboard running at http://localhost:{port}")
+    except Exception:
+        pass
     if daemon:
         t = threading.Thread(target=httpd.serve_forever, daemon=True)
         t.start()
