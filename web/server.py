@@ -22,6 +22,7 @@ from core.vault import KeyVault
 from core.venice_client import VeniceClient
 from core.tg_manager import TelegramAgentManager
 from core.deployer import ConfigDeployer
+from core.tiers import MODEL_TIER_ORDER, MODEL_TIER_MAPPING, is_tier_allowed, resolve_model_tier, get_model_for_tier
 
 logger = logging.getLogger("venice_web")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -126,6 +127,13 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             res = client.list_models()
             self._send_json(res)
 
+        elif path == "/api/model_tiers":
+            self._send_json({
+                "success": True,
+                "tier_order": MODEL_TIER_ORDER,
+                "tiers": MODEL_TIER_MAPPING
+            })
+
         elif path == "/api/agent_bots":
             bots = self.tg_manager.list_agent_bots(check_live_status=False)
             self._send_json({"success": True, "agent_bots": bots})
@@ -159,6 +167,9 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             period = body.get("limit_period", "MONTH")
             expires = body.get("expires_at")
             admin_key_param = body.get("admin_key", "").strip()
+            max_tier = (body.get("max_model_tier") or "xl").lower().strip()
+            if max_tier not in MODEL_TIER_ORDER:
+                max_tier = "xl"
 
             # Mode 1: Import existing key into vault
             if mode == "import" or (key_str and mode != "generate"):
@@ -184,6 +195,7 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
                     "apiKey": key_str,
                     "description": desc or "Imported Venice Key",
                     "apiKeyType": k_type,
+                    "maxModelTier": max_tier,
                     "consumptionLimits": {"usd": float(limit)} if limit else {},
                     "usage": {"trailingSevenDays": {"usd": 0.0}},
                     "createdAt": datetime.utcnow().isoformat() + "Z",
@@ -230,6 +242,7 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             )
             if res.get("success"):
                 key_obj = res.get("key", {})
+                key_obj["maxModelTier"] = max_tier
                 self.vault.store_venice_key(key_obj)
             self._send_json(res)
 
@@ -262,6 +275,23 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             model = body.get("model", "deepseek-v4-flash")
             max_tokens = int(body.get("max_tokens", 120))
             temperature = float(body.get("temperature", 0.7))
+            key_id = body.get("key_id", "")
+
+            # Check model tier gating if key_id is provided
+            if key_id:
+                key_entry = next((k for k in self.vault.get_venice_keys() if k.get("id") == key_id or k.get("apiKey") == key_id), None)
+                if key_entry:
+                    key_max_tier = key_entry.get("maxModelTier", "xl")
+                    req_tier = resolve_model_tier(model)
+                    if not is_tier_allowed(req_tier, key_max_tier):
+                        self._send_json({
+                            "success": False,
+                            "error": f"Model tier '{req_tier.upper()}' ({model}) exceeds key's maximum allowed tier '{key_max_tier.upper()}'. Access denied.",
+                            "requested_tier": req_tier,
+                            "max_tier": key_max_tier
+                        }, status=403)
+                        return
+
             res = client.test_inference(prompt=prompt, model=model, max_tokens=max_tokens, temperature=temperature)
             self._send_json(res)
 

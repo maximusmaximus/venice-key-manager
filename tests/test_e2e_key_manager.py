@@ -215,6 +215,54 @@ def test_7_frontend_dom_contract():
     print("  [PASSED] Frontend DOM contract 100% verified.")
 
 
+def test_8_model_quality_tiers_and_gating():
+    print("\n--- [E2E Test 8/8] Model Quality Tiers (XS to XL) & Inference Gating ---")
+    # 1. Test /api/model_tiers
+    status, tiers_data = http_request("/api/model_tiers")
+    assert status == 200, f"Expected 200 from /api/model_tiers, got {status}"
+    assert tiers_data.get("success") is True, f"Failed /api/model_tiers: {tiers_data}"
+    assert tiers_data.get("tier_order") == ["xs", "s", "m", "l", "xl"], f"Unexpected tier order: {tiers_data.get('tier_order')}"
+    assert all(t in tiers_data.get("tiers", {}) for t in ["xs", "s", "m", "l", "xl"]), "Missing tiers in tier mapping"
+    print("  [+] /api/model_tiers returned all 5 tiers (XS, S, M, L, XL).")
+
+    # 2. Import a restricted key with tier 's'
+    vault_file = PROJECT_ROOT / "venice_vault.json"
+    with open(vault_file, "r", encoding="utf-8") as f:
+        vault_data = json.load(f)
+    active_key = vault_data.get("venice", {}).get("inference_key")
+
+    import_payload = {
+        "mode": "import",
+        "key_string": active_key,
+        "description": "Tier Gated Agent Key (Tier S)",
+        "key_type": "INFERENCE",
+        "max_model_tier": "s"
+    }
+    status, res = http_request("/api/create_key", method="POST", data=import_payload)
+    assert status == 200, f"Expected 200, got {status}"
+    assert res.get("success") is True
+    key_obj = res.get("key", {})
+    assert key_obj.get("maxModelTier") == "s", f"Expected maxModelTier 's', got {key_obj.get('maxModelTier')}"
+    key_id = key_obj.get("id")
+    print(f"  [+] Created key {key_id} with maxModelTier='s'")
+
+    # 3. Test inference gating with a tier 'l' model (deepseek-r1)
+    infer_blocked_payload = {
+        "key_id": key_id,
+        "model": "deepseek-r1",
+        "prompt": "Test prompt"
+    }
+    status, infer_res = http_request("/api/infer", method="POST", data=infer_blocked_payload)
+    assert status == 403, f"Expected status 403 Forbidden for tier escalation, got {status}"
+    assert infer_res.get("success") is False
+    assert "exceeds" in infer_res.get("error", "").lower()
+    print(f"  [+] Gating blocked higher-tier model: {infer_res.get('error')}")
+
+    # 4. Clean up the test key
+    http_request("/api/revoke_key", method="POST", data={"key_id": key_id})
+    print("  [PASSED] Model quality tier hierarchy and inference gating verified.")
+
+
 def run_all_e2e_tests():
     print("=" * 65)
     print("=== RUNNING VENICE & TG KEY MANAGER E2E TEST SUITE ===")
@@ -228,9 +276,10 @@ def run_all_e2e_tests():
     imported_key_id = test_5_import_valid_key_persistence()
     test_6_deploy_and_revoke_key(imported_key_id)
     test_7_frontend_dom_contract()
+    test_8_model_quality_tiers_and_gating()
 
     print("\n" + "=" * 65)
-    print(">>> ALL 7 E2E TESTS PASSED SUCCESSFULLY! <<<")
+    print(">>> ALL 8 E2E TESTS PASSED SUCCESSFULLY! <<<")
     print("=" * 65)
 
 

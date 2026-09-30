@@ -202,8 +202,16 @@ async function loadKeys() {
         const id = k.id || "N/A";
         const desc = k.description || "Venice Key";
         const type = k.apiKeyType || "INFERENCE";
+        const tier = (k.maxModelTier || "xl").toUpperCase();
+        let tierBadgeClass = "badge-purple";
+        if (tier === "XS") tierBadgeClass = "badge-cyan";
+        else if (tier === "S") tierBadgeClass = "badge-green";
+        else if (tier === "M") tierBadgeClass = "badge-yellow";
+        else if (tier === "L") tierBadgeClass = "badge-dim";
+        else if (tier === "XL") tierBadgeClass = "badge-purple";
+
         const limitUsd = (k.consumptionLimits && k.consumptionLimits.usd) ? `$${k.consumptionLimits.usd}` : "Unlimited";
-        const usage = (k.usage && k.usage.trailingSevenDays && k.usage.trailingSevenDays.usd) ? `$${k.usage.trailingSevenDays.usd}` : "$0.00";
+        const usage = (k.usage && k.usage.trailingDays && k.usage.trailingSevenDays.usd) ? `$${k.usage.trailingSevenDays.usd}` : (k.usage && k.usage.trailingSevenDays && k.usage.trailingSevenDays.usd) ? `$${k.usage.trailingSevenDays.usd}` : "$0.00";
         const created = k.createdAt ? new Date(k.createdAt).toLocaleDateString() : "Active";
 
         return `
@@ -212,7 +220,12 @@ async function loadKeys() {
               <div style="font-weight: 600;">${escapeHtml(desc)}</div>
               <div class="text-muted text-mono" style="font-size: 11px;">${escapeHtml(id)}</div>
             </td>
-            <td><span class="badge ${type === 'ADMIN' ? 'badge-purple' : 'badge-cyan'}">${type}</span></td>
+            <td>
+              <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                <span class="badge ${type === 'ADMIN' ? 'badge-purple' : 'badge-cyan'}">${type}</span>
+                <span class="badge ${tierBadgeClass}">TIER: ${tier}</span>
+              </div>
+            </td>
             <td>${limitUsd}</td>
             <td>${usage}</td>
             <td><span class="badge badge-green">${created}</span></td>
@@ -397,6 +410,8 @@ function initForms() {
       const desc = document.getElementById("import-key-desc").value.trim() || "Imported Key";
       const kType = document.getElementById("import-key-type").value;
       const limit = document.getElementById("import-key-limit").value;
+      const tierSelect = document.getElementById("import-key-tier");
+      const tier = tierSelect ? tierSelect.value : "xl";
 
       if (!keyStr) {
         showToast("Please enter or paste a Venice API key", "error");
@@ -416,6 +431,7 @@ function initForms() {
             key_string: keyStr,
             description: desc,
             key_type: kType,
+            max_model_tier: tier,
             limit_usd: limit ? parseFloat(limit) : null
           })
         });
@@ -448,6 +464,8 @@ function initForms() {
       const kType = document.getElementById("new-key-type").value;
       const limit = document.getElementById("new-key-limit").value;
       const period = document.getElementById("new-key-period").value;
+      const tierSelect = document.getElementById("new-key-tier");
+      const tier = tierSelect ? tierSelect.value : "xl";
       const adminKeyInput = document.getElementById("modal-admin-key-input");
       const adminKey = adminKeyInput ? adminKeyInput.value.trim() : "";
 
@@ -459,6 +477,7 @@ function initForms() {
           mode: "generate",
           description: desc,
           key_type: kType,
+          max_model_tier: tier,
           limit_usd: limit ? parseFloat(limit) : null,
           limit_period: period
         };
