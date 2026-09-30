@@ -117,7 +117,7 @@ def require_auth(request: Request, token: Optional[str] = Depends(extract_token_
     if not token or not state_store.validate_auth_token(token):
         raise HTTPException(
             status_code=401,
-            detail="Authentication required. Please submit a valid Telegram access key."
+            detail="Authentication required. Please submit a valid access key."
         )
     return token
 
@@ -164,7 +164,7 @@ async def index_page(
 
 
 # =============================================================================
-# Auth Endpoints (Telegram-generated session keys)
+# Auth Endpoints (Session and pairing keys)
 # =============================================================================
 
 @app.post("/api/auth/verify")
@@ -286,7 +286,9 @@ async def list_keys(category: Optional[str] = Query(None)):
 async def create_key(req: KeyCreateRequest):
     try:
         res = await client.create_key(req)
-        return res.model_dump()
+        data = res.model_dump()
+        data["endpoints"] = state_store.get_network_endpoints()
+        return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -309,6 +311,7 @@ async def create_batch_keys_endpoint(req: BatchKeyCreateRequest):
             "count": len(results),
             "prefix": req.prefix,
             "keys": [r.model_dump() for r in results],
+            "endpoints": state_store.get_network_endpoints(),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -338,11 +341,14 @@ async def cycle_key(key_id: str, req: KeyCycleRequest):
     req.id = key_id
     try:
         new_key_resp, revoked_old = await client.cycle_key(req)
+        new_key_data = new_key_resp.model_dump()
+        new_key_data["endpoints"] = state_store.get_network_endpoints()
         return {
             "status": "cycled",
-            "new_key": new_key_resp.model_dump(),
+            "new_key": new_key_data,
             "old_key_id": key_id,
             "old_key_revoked": revoked_old,
+            "endpoints": state_store.get_network_endpoints(),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -479,8 +485,8 @@ async def send_daily_report(chat_id: Optional[str] = Query(None)):
         reporter = DailyKeyReport(client=client)
         sent = await reporter.send_to_telegram(chat_id=chat_id)
         if not sent:
-            raise HTTPException(status_code=500, detail="Failed to dispatch report to Telegram.")
-        return {"success": True, "message": "Daily report sent to Telegram."}
+            raise HTTPException(status_code=500, detail="Failed to dispatch report notification.")
+        return {"success": True, "message": "Daily report notification dispatched successfully."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -685,7 +691,11 @@ async def create_external_key(req: ExternalKeyCreateRequest):
             created_by="admin",
             key_type="ADMIN_EXTERNAL",
         )
-        return {"success": True, "key": key_record}
+        return {
+            "success": True,
+            "key": key_record,
+            "endpoints": state_store.get_network_endpoints()
+        }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -702,7 +712,11 @@ async def create_sub_key_admin(key_id: str, req: SubKeyCreateRequest):
             max_model_tier=req.max_model_tier,
             notes=req.notes,
         )
-        return {"success": True, "key": sub_key}
+        return {
+            "success": True,
+            "key": sub_key,
+            "endpoints": state_store.get_network_endpoints()
+        }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -738,9 +752,11 @@ class GatewayConfigUpdate(BaseModel):
 async def get_gateway_info(request: Request):
     """Return Cloudflare gateway URL, available tiers, and client connection snippets."""
     gw_url = state_store.get_cloudflare_gateway_url() or str(request.base_url).rstrip("/")
+    endpoints = state_store.get_network_endpoints()
     return {
         "cloudflare_gateway_url": state_store.get_cloudflare_gateway_url(),
         "effective_gateway_url": gw_url,
+        "endpoints": endpoints,
         "tiers": MODEL_TIER_MAPPING,
         "tier_order": MODEL_TIER_ORDER,
         "total_projects": len(state_store.list_projects()),
@@ -869,6 +885,7 @@ async def gateway_create_subkey(
         return {
             "success": True,
             "sub_key": subkey,
+            "endpoints": state_store.get_network_endpoints(),
             "message": f"Sub-key generated with ${amount:.2f} USD per {req.period.lower()} allocation.",
         }
     except Exception as e:

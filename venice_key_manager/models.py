@@ -1,5 +1,5 @@
 from typing import Dict, List, Optional, Any, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 
 
@@ -111,6 +111,12 @@ class KeyCreateRequest(BaseModel):
     category: str = "Default"
     custom_threshold: Optional[float] = None
 
+    @field_validator("description", mode="before")
+    def validate_description(cls, v):
+        if not v or not str(v).strip():
+            raise ValueError("Key name or description is required and cannot be empty.")
+        return str(v).strip()
+
 
 class KeyCreatedResponse(BaseModel):
     apiKey: str
@@ -120,6 +126,7 @@ class KeyCreatedResponse(BaseModel):
     consumptionLimits: Optional[ConsumptionLimit] = None
     limitPeriod: str
     category: str = "Default"
+    endpoints: Optional[Dict[str, str]] = None
 
 
 class KeyUpdateRequest(BaseModel):
@@ -302,6 +309,12 @@ class ProjectCreateRequest(BaseModel):
     default_sub_key_daily_usd: float = 0.25  # Default: 25 cents per project per day
     max_model_tier: str = "xl"
 
+    @field_validator("name", mode="before")
+    def validate_name(cls, v):
+        if not v or not str(v).strip():
+            raise ValueError("Project name is required and cannot be empty.")
+        return str(v).strip()
+
 
 class ProjectUpdateRequest(BaseModel):
     name: Optional[str] = None
@@ -323,6 +336,12 @@ class ExternalKeyCreateRequest(BaseModel):
     prefix: str = "vkm_ext_"
     notes: Optional[str] = None
 
+    @field_validator("name", mode="before")
+    def validate_name(cls, v):
+        if not v or not str(v).strip():
+            raise ValueError("External key name is required and cannot be empty.")
+        return str(v).strip()
+
 
 class ExternalKeyUpdateRequest(BaseModel):
     name: Optional[str] = None
@@ -339,6 +358,12 @@ class SubKeyCreateRequest(BaseModel):
     max_model_tier: Optional[str] = None
     notes: Optional[str] = None
 
+    @field_validator("name", mode="before")
+    def validate_name(cls, v):
+        if not v or not str(v).strip():
+            raise ValueError("Sub-key name is required and cannot be empty.")
+        return str(v).strip()
+
 
 class GatewayAllocationResponse(BaseModel):
     key_name: str
@@ -352,5 +377,6 @@ class GatewayAllocationResponse(BaseModel):
     max_model_tier: str
     status: str
     cloudflare_gateway_url: Optional[str] = None
+    endpoints: Optional[Dict[str, str]] = None
 
 

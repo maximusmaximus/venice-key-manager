@@ -217,9 +217,12 @@ def main():
             print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
     elif args.command == "create":
+        if not args.name or not args.name.strip():
+            print("❌ Error: Key name is required and cannot be empty.", file=sys.stderr)
+            sys.exit(1)
         client = VeniceClient()
         req = KeyCreateRequest(
-            description=args.name,
+            description=args.name.strip(),
             daily_usd=args.daily_usd,
             limitPeriod=args.period,
             apiKeyType=args.type,
@@ -227,6 +230,7 @@ def main():
             custom_threshold=args.threshold
         )
         res = asyncio.run(client.create_key(req))
+        endpoints = state_store.get_network_endpoints()
         print("\n🎉 Venice Key Created Successfully!")
         print(f"• Name:        {res.description}")
         print(f"• ID:          {res.id}")
@@ -234,24 +238,36 @@ def main():
         print(f"• Type:        {res.apiKeyType}")
         print(f"• Spend Limit: {f'${args.daily_usd:.2f}' if args.daily_usd is not None else 'Unlimited'} ({res.limitPeriod})")
         print(f"• API Token:   {res.apiKey}")
+        print("\n🌐 CONNECTION ENDPOINTS FOR RECEIVING AGENTS:")
+        print(f"  • External (Cloudflare DNS): {endpoints['cloudflare_v1_url']}")
+        print(f"  • Internal (Tailscale VPN):  {endpoints['tailscale_v1_url']}")
+        print(f"  • Local Loopback:            {endpoints['local_v1_url']}")
         print("\n⚠️ Store this token now. It will never be shown again.\n")
 
     elif args.command == "create-batch":
+        if not args.prefix or not args.prefix.strip():
+            print("❌ Error: Key name prefix is required and cannot be empty.", file=sys.stderr)
+            sys.exit(1)
         client = VeniceClient()
         results = asyncio.run(client.create_batch_keys(
-            prefix=args.prefix,
+            prefix=args.prefix.strip(),
             count=args.count,
             daily_usd=args.daily_usd,
             category=args.category,
             api_key_type=args.type,
             limit_period=args.period,
         ))
+        endpoints = state_store.get_network_endpoints()
         print(f"\n🎉 Successfully Minted Batch of {len(results)} Keys (Prefix: '{args.prefix}')")
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         for idx, k in enumerate(results, 1):
             print(f"#{idx:02d} | Name: {k.description:<24} | ID: {k.id}")
             print(f"     Token: {k.apiKey}")
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("🌐 CONNECTION ENDPOINTS FOR RECEIVING AGENTS:")
+        print(f"  • External (Cloudflare DNS): {endpoints['cloudflare_v1_url']}")
+        print(f"  • Internal (Tailscale VPN):  {endpoints['tailscale_v1_url']}")
+        print(f"  • Local Loopback:            {endpoints['local_v1_url']}")
         print("⚠️ Store these secret tokens now. They will never be shown again.\n")
 
     elif args.command == "cycle":
@@ -263,10 +279,15 @@ def main():
             new_description=args.name
         )
         res, revoked = asyncio.run(client.cycle_key(req))
+        endpoints = state_store.get_network_endpoints()
         print("\n🔄 Key Successfully Cycled / Rotated!")
         print(f"• New Key ID:     {res.id}")
         print(f"• Old Key ID:     {args.id} (Revoked: {revoked})")
-        print(f"• New API Token:  {res.apiKey}\n")
+        print(f"• New API Token:  {res.apiKey}")
+        print("\n🌐 CONNECTION ENDPOINTS FOR RECEIVING AGENTS:")
+        print(f"  • External (Cloudflare DNS): {endpoints['cloudflare_v1_url']}")
+        print(f"  • Internal (Tailscale VPN):  {endpoints['tailscale_v1_url']}")
+        print(f"  • Local Loopback:            {endpoints['local_v1_url']}\n")
 
     elif args.command == "revoke":
         client = VeniceClient()
@@ -440,38 +461,61 @@ def main():
                 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
         elif args.extkey_action == "create":
+            if not args.name or not args.name.strip():
+                print("❌ Error: External key / agent name is required and cannot be empty.", file=sys.stderr)
+                sys.exit(1)
             k = state_store.create_external_key(
                 project_id=args.project,
-                name=args.name,
+                name=args.name.strip(),
                 daily_limit_usd=args.daily_usd,
                 limit_period=args.period,
                 max_model_tier=args.tier,
                 prefix=args.prefix,
                 notes=args.notes,
             )
-            gw_url = state_store.get_cloudflare_gateway_url() or "http://localhost:8660"
+            endpoints = state_store.get_network_endpoints()
             print(f"\n🎉 External Key Created: {k['name']} (ID: {k['id']})")
             print(f"• Project ID:        {k['project_id']}")
             print(f"• Daily Spend Limit: ${k['daily_limit_usd']:.2f} USD")
             print(f"• Max Permitted Tier:{k['max_model_tier'].upper()}")
             print(f"• Key Token:         {k['token']}")
-            print(f"\n⚡ cURL Test Snippet:")
-            print(f"curl -X POST {gw_url}/v1/chat/completions \\\n  -H 'Authorization: Bearer {k['token']}' \\\n  -H 'Content-Type: application/json' \\\n  -d '{{\"model\": \"{k['max_model_tier']}\", \"messages\": [{{\"role\": \"user\", \"content\": \"Hello!\"}}]}}'\n")
+            print("\n🌐 CONNECTION ENDPOINTS FOR RECEIVING AGENTS:")
+            print(f"  • External (Cloudflare DNS): {endpoints['cloudflare_v1_url']}")
+            print(f"  • Internal (Tailscale VPN):  {endpoints['tailscale_v1_url']}")
+            print(f"  • Local Loopback:            {endpoints['local_v1_url']}")
+            print(f"\n⚡ cURL Test Snippets:")
+            print(f"  [External Agent via Cloudflare]")
+            print(f"  curl -X POST {endpoints['cloudflare_v1_url']}/chat/completions \\\n    -H 'Authorization: Bearer {k['token']}' \\\n    -H 'Content-Type: application/json' \\\n    -d '{{\"model\": \"{k['max_model_tier']}\", \"messages\": [{{\"role\": \"user\", \"content\": \"Hello!\"}}]}}'")
+            print(f"  [Internal Agent via Tailscale]")
+            print(f"  curl -X POST {endpoints['tailscale_v1_url']}/chat/completions \\\n    -H 'Authorization: Bearer {k['token']}' \\\n    -H 'Content-Type: application/json' \\\n    -d '{{\"model\": \"{k['max_model_tier']}\", \"messages\": [{{\"role\": \"user\", \"content\": \"Hello!\"}}]}}'\n")
 
         elif args.extkey_action == "subkey":
+            if not args.name or not args.name.strip():
+                print("❌ Error: Sub-key name is required and cannot be empty.", file=sys.stderr)
+                sys.exit(1)
             sub = state_store.create_sub_key(
                 parent_key_or_token=args.parent,
-                name=args.name,
+                name=args.name.strip(),
                 amount_usd=args.amount,
                 period=args.period,
                 max_model_tier=args.tier,
                 notes=args.notes,
             )
+            endpoints = state_store.get_network_endpoints()
             print(f"\n🌱 Delegated Sub-Key Created: {sub['name']} (ID: {sub['id']})")
             print(f"• Parent Key ID:     {sub.get('parent_key_id')}")
             print(f"• Allocation Limit:  ${sub['daily_limit_usd']:.2f} USD / {sub['limit_period']}")
             print(f"• Max Model Tier:    {sub['max_model_tier'].upper()}")
-            print(f"• Sub-Key Token:     {sub['token']}\n")
+            print(f"• Sub-Key Token:     {sub['token']}")
+            print("\n🌐 CONNECTION ENDPOINTS FOR RECEIVING AGENTS:")
+            print(f"  • External (Cloudflare DNS): {endpoints['cloudflare_v1_url']}")
+            print(f"  • Internal (Tailscale VPN):  {endpoints['tailscale_v1_url']}")
+            print(f"  • Local Loopback:            {endpoints['local_v1_url']}")
+            print(f"\n⚡ cURL Test Snippets:")
+            print(f"  [External Agent via Cloudflare]")
+            print(f"  curl -X POST {endpoints['cloudflare_v1_url']}/chat/completions \\\n    -H 'Authorization: Bearer {sub['token']}' \\\n    -H 'Content-Type: application/json' \\\n    -d '{{\"model\": \"{sub['max_model_tier']}\", \"messages\": [{{\"role\": \"user\", \"content\": \"Hello!\"}}]}}'")
+            print(f"  [Internal Agent via Tailscale]")
+            print(f"  curl -X POST {endpoints['tailscale_v1_url']}/chat/completions \\\n    -H 'Authorization: Bearer {sub['token']}' \\\n    -H 'Content-Type: application/json' \\\n    -d '{{\"model\": \"{sub['max_model_tier']}\", \"messages\": [{{\"role\": \"user\", \"content\": \"Hello!\"}}]}}'\n")
 
         elif args.extkey_action == "modify":
             updates = {}

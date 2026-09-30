@@ -8,7 +8,7 @@ let dashboardInitialized = false;
 
 let allKeys = [];
 let allModels = [];
-let allCategories = ["Default", "Agents", "Production", "Testing", "Telegram"];
+let allCategories = ["Default", "Agents", "Production", "Testing", "External"];
 let activeCategory = "all";
 let globalThreshold = 0.20;
 let sseSource = null;
@@ -30,7 +30,7 @@ async function authFetch(url, options = {}) {
 
   const res = await fetch(url, options);
   if (res.status === 401) {
-    lockDashboard("Session expired or access revoked. Please enter a valid Telegram key.");
+    lockDashboard("Session expired or access revoked. Please enter a valid access code.");
     throw new Error("Unauthorized");
   }
   return res;
@@ -78,7 +78,7 @@ function initAuth() {
       e.preventDefault();
       const val = input.value.trim();
       if (!val) {
-        showAuthGate("Please enter your Telegram access key.");
+        showAuthGate("Please enter your authorization access code.");
         return;
       }
       btnSubmit.disabled = true;
@@ -115,7 +115,7 @@ async function verifyAndUnlock(token, onComplete) {
   } catch (err) {
     localStorage.removeItem(AUTH_TOKEN_KEY);
     authToken = "";
-    showAuthGate("Invalid or expired access key. Please generate a new key in Telegram.");
+    showAuthGate("Invalid or expired access code. Please request a new code from admin.");
   } finally {
     if (onComplete) onComplete();
   }
@@ -683,6 +683,72 @@ function initModals() {
       showToast("Copied .env format to clipboard!", "success");
     });
   }
+
+  const btnCopyBatchBundle = document.getElementById("btn-copy-batch-keys-bundle");
+  if (btnCopyBatchBundle) {
+    btnCopyBatchBundle.addEventListener("click", () => {
+      if (!currentBatchKeys || !currentBatchKeys.length) return;
+      const tsUrl = currentBatchEndpoints?.tailscale_v1_url || "http://100.99.202.75:8660/v1";
+      const cfUrl = currentBatchEndpoints?.cloudflare_v1_url || "https://worship-him-knight-jul.trycloudflare.com/v1";
+      let bundle = `📦 VENICE BATCH KEYS ALLOCATION (${currentBatchKeys.length} Keys)\n`;
+      bundle += `🌐 Tailscale Address (Internal): ${tsUrl}\n`;
+      bundle += `☁️ Cloudflare DNS URL (External): ${cfUrl}\n\n`;
+      bundle += `KEYS:\n`;
+      currentBatchKeys.forEach((k, i) => {
+        bundle += `${i + 1}. ${k.description}: ${k.apiKey}\n`;
+      });
+      navigator.clipboard.writeText(bundle);
+      showToast("Copied full batch bundle with endpoints!", "success");
+    });
+  }
+
+  const btnCopyKeyBundle = document.getElementById("btn-copy-revealed-key-bundle");
+  if (btnCopyKeyBundle) {
+    btnCopyKeyBundle.addEventListener("click", () => {
+      if (!currentRevealedKeyBundle) return;
+      const b = currentRevealedKeyBundle;
+      const text = `🔑 VENICE API KEY: ${b.name}\n` +
+        `Token: ${b.token}\n` +
+        `ID: ${b.id}\n\n` +
+        `🌐 CONNECTION ENDPOINTS FOR RECEIVING AGENTS:\n` +
+        `• Tailscale Address (Internal Agents): ${b.tailscale_address}\n` +
+        `• Cloudflare DNS URL (External Agents): ${b.cloudflare_dns_url}\n\n` +
+        `cURL Fast Test Snippet:\n` +
+        `curl -X POST ${b.cloudflare_dns_url}/chat/completions \\\n` +
+        `  -H "Authorization: Bearer ${b.token}" \\\n` +
+        `  -H "Content-Type: application/json" \\\n` +
+        `  -d '{"model": "deepseek-v4-flash", "messages": [{"role": "user", "content": "Hello Venice!"}]}'`;
+      navigator.clipboard.writeText(text);
+      showToast("Full agent bundle copied to clipboard!", "success");
+    });
+  }
+
+  const btnCopyExtBundle = document.getElementById("btn-copy-revealed-ext-bundle");
+  if (btnCopyExtBundle) {
+    btnCopyExtBundle.addEventListener("click", () => {
+      if (!currentRevealedExtBundle) return;
+      const b = currentRevealedExtBundle;
+      const text = `🔑 VENICE INFERENCE KEY: ${b.name}\n` +
+        `Token: ${b.token}\n` +
+        `Project: ${b.project_name}\n` +
+        `Allocation: $${b.daily_limit_usd} / day (Max Tier: ${b.max_tier.toUpperCase()})\n\n` +
+        `🌐 CONNECTION ENDPOINTS FOR RECEIVING AGENTS:\n` +
+        `• Tailscale Address (Internal Agents): ${b.tailscale_address}\n` +
+        `• Cloudflare DNS URL (External Agents): ${b.cloudflare_dns_url}\n\n` +
+        `cURL Snippet:\n` +
+        `curl -X POST ${b.cloudflare_dns_url}/chat/completions \\\n` +
+        `  -H "Authorization: Bearer ${b.token}" \\\n` +
+        `  -H "Content-Type: application/json" \\\n` +
+        `  -d '{"model": "${b.max_tier}", "messages": [{"role": "user", "content": "Hello!"}]}'\n\n` +
+        `Python Snippet:\n` +
+        `from openai import OpenAI\n` +
+        `client = OpenAI(base_url="${b.cloudflare_dns_url}", api_key="${b.token}")\n` +
+        `res = client.chat.completions.create(model="${b.max_tier}", messages=[{"role": "user", "content": "Hello!"}])\n` +
+        `print(res.choices[0].message.content)`;
+      navigator.clipboard.writeText(text);
+      showToast("Full agent bundle copied to clipboard!", "success");
+    });
+  }
 }
 
 function initPresets() {
@@ -696,9 +762,12 @@ function initPresets() {
   });
 }
 
-// Global batch state for UI copy actions
+// Global batch and revealed bundles state
 let currentBatchCodes = [];
 let currentBatchKeys = [];
+let currentBatchEndpoints = null;
+let currentRevealedKeyBundle = null;
+let currentRevealedExtBundle = null;
 
 async function handleCreateKey() {
   const desc = document.getElementById("create-desc").value.trim();
@@ -741,8 +810,25 @@ async function handleCreateKey() {
 
       // Show revealed modal with first key or summary
       const first = data.keys[0];
+      const tsUrl = data.endpoints?.tailscale_v1_url || "http://100.99.202.75:8660/v1";
+      const cfUrl = data.endpoints?.cloudflare_v1_url || "https://worship-him-knight-jul.trycloudflare.com/v1";
+
       document.getElementById("revealed-key-token").value = first.apiKey;
       document.getElementById("revealed-key-id").value = `${data.count} Keys Minted (e.g. ${first.id})`;
+
+      const tsInput = document.getElementById("revealed-key-tailscale");
+      if (tsInput) tsInput.value = tsUrl;
+      const cfInput = document.getElementById("revealed-key-cloudflare");
+      if (cfInput) cfInput.value = cfUrl;
+
+      currentRevealedKeyBundle = {
+        name: `${desc} (Batch of ${data.count})`,
+        token: first.apiKey,
+        id: first.id,
+        tailscale_address: tsUrl,
+        cloudflare_dns_url: cfUrl,
+      };
+
       const envSnippet = data.keys.map((k, i) => `export VENICE_KEY_${i + 1}="${k.apiKey}" # ${k.description}`).join("\n");
       document.getElementById("revealed-curl").innerText = envSnippet;
       document.getElementById("modal-key-revealed").classList.remove("hidden");
@@ -778,11 +864,27 @@ async function handleCreateKey() {
 
     document.getElementById("modal-create-key").classList.add("hidden");
 
-    // Show revealed token modal
+    // Populate revealed token modal
     document.getElementById("revealed-key-token").value = data.apiKey;
     document.getElementById("revealed-key-id").value = data.id;
 
-    const curlSnippet = `curl -X POST https://api.venice.ai/api/v1/chat/completions \\\n  -H "Authorization: Bearer ${data.apiKey}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "deepseek-v4-flash", "messages": [{"role": "user", "content": "Hello Venice"}]}'`;
+    const tsUrl = data.endpoints?.tailscale_v1_url || "http://100.99.202.75:8660/v1";
+    const cfUrl = data.endpoints?.cloudflare_v1_url || "https://worship-him-knight-jul.trycloudflare.com/v1";
+
+    const tsInput = document.getElementById("revealed-key-tailscale");
+    if (tsInput) tsInput.value = tsUrl;
+    const cfInput = document.getElementById("revealed-key-cloudflare");
+    if (cfInput) cfInput.value = cfUrl;
+
+    currentRevealedKeyBundle = {
+      name: desc,
+      token: data.apiKey,
+      id: data.id,
+      tailscale_address: tsUrl,
+      cloudflare_dns_url: cfUrl,
+    };
+
+    const curlSnippet = `# 1. Direct Venice API:\ncurl -X POST https://api.venice.ai/api/v1/chat/completions \\\n  -H "Authorization: Bearer ${data.apiKey}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "deepseek-v4-flash", "messages": [{"role": "user", "content": "Hello Venice"}]}'\n\n# 2. Local Mesh Gateway (Tailscale):\ncurl -X POST ${tsUrl}/chat/completions \\\n  -H "Authorization: Bearer ${data.apiKey}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "deepseek-v4-flash", "messages": [{"role": "user", "content": "Hello!"}]}'\n\n# 3. External Gateway (Cloudflare DNS):\ncurl -X POST ${cfUrl}/chat/completions \\\n  -H "Authorization: Bearer ${data.apiKey}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "deepseek-v4-flash", "messages": [{"role": "user", "content": "Hello!"}]}'`;
     document.getElementById("revealed-curl").innerText = curlSnippet;
 
     document.getElementById("modal-key-revealed").classList.remove("hidden");
@@ -931,10 +1033,20 @@ async function handleBatchKeysMint() {
     }
     const data = await res.json();
     currentBatchKeys = data.keys || [];
+    currentBatchEndpoints = data.endpoints || null;
 
     const resultsBox = document.getElementById("batch-key-results-box");
     const outList = document.getElementById("batch-keys-output-list");
+    const epBox = document.getElementById("batch-key-endpoints-info");
     resultsBox.classList.remove("hidden");
+
+    if (epBox && currentBatchEndpoints) {
+      epBox.innerHTML = `
+        <div class="mb-1 text-accent font-semibold">🌐 Connection Endpoints for Receiving Agents:</div>
+        <div><strong>• Tailscale (Internal Mesh):</strong> <span class="mono text-white">${escapeHtml(currentBatchEndpoints.tailscale_v1_url || '')}</span></div>
+        <div><strong>• Cloudflare DNS (External):</strong> <span class="mono text-white">${escapeHtml(currentBatchEndpoints.cloudflare_v1_url || '')}</span></div>
+      `;
+    }
 
     outList.innerHTML = currentBatchKeys.map((k, idx) => `
       <div class="batch-item-row" style="padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.06); display:flex; justify-content:space-between; align-items:center;">
@@ -1412,12 +1524,12 @@ function initReport() {
           const errData = await res.json().catch(() => ({}));
           throw new Error(errData.detail || "Failed to dispatch report");
         }
-        showToast("Report successfully dispatched to Telegram!", "success");
+        showToast("Report notification successfully dispatched!", "success");
       } catch (err) {
         showToast(err.message, "error");
       } finally {
         btnSendTg.disabled = false;
-        btnSendTg.innerText = "✈️ Send to Telegram";
+        btnSendTg.innerText = "🚀 Dispatch Notification";
       }
     });
   }
@@ -1820,7 +1932,7 @@ async function handleCreateExternalKey() {
     }
     const data = await res.json();
     document.getElementById("modal-create-ext-key").classList.add("hidden");
-    revealExternalKey(data.key);
+    revealExternalKey(data.key, data.endpoints);
     loadExternalKeys();
     loadProjects();
   } catch (err) {
@@ -1865,7 +1977,7 @@ async function handleCreateSubKey() {
     }
     const data = await res.json();
     document.getElementById("modal-create-sub-key").classList.add("hidden");
-    revealExternalKey(data.key);
+    revealExternalKey(data.key, data.endpoints);
     loadExternalKeys();
     loadProjects();
   } catch (err) {
@@ -1926,22 +2038,45 @@ async function revokeExternalKey(keyId) {
   }
 }
 
-function revealExternalKey(keyObj) {
+function revealExternalKey(keyObj, endpoints) {
   document.getElementById("revealed-ext-key-token").value = keyObj.token;
-  const gwUrl = currentGatewayInfo?.effective_gateway_url || "http://localhost:8660";
-  const curlCmd = `curl -X POST ${gwUrl}/v1/chat/completions \\\n  -H "Authorization: Bearer ${keyObj.token}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "${keyObj.max_model_tier}", "messages": [{"role": "user", "content": "Hello!"}]}'`;
+
+  const tsUrl = endpoints?.tailscale_v1_url || "http://100.99.202.75:8660/v1";
+  const cfUrl = endpoints?.cloudflare_v1_url || (currentGatewayInfo?.effective_gateway_url ? `${currentGatewayInfo.effective_gateway_url}/v1` : "https://worship-him-knight-jul.trycloudflare.com/v1");
+
+  const tsInput = document.getElementById("revealed-ext-key-tailscale");
+  if (tsInput) tsInput.value = tsUrl;
+  const cfInput = document.getElementById("revealed-ext-key-cloudflare");
+  if (cfInput) cfInput.value = cfUrl;
+
+  const modelTier = keyObj.max_model_tier || "xl";
+
+  const curlCmd = `# 1. Internal Agent (Tailscale Address):\ncurl -X POST ${tsUrl}/chat/completions \\\n  -H "Authorization: Bearer ${keyObj.token}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "${modelTier}", "messages": [{"role": "user", "content": "Hello!"}]}'\n\n# 2. External Agent (Cloudflare DNS URL):\ncurl -X POST ${cfUrl}/chat/completions \\\n  -H "Authorization: Bearer ${keyObj.token}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "${modelTier}", "messages": [{"role": "user", "content": "Hello!"}]}'`;
   document.getElementById("revealed-ext-key-curl").innerText = curlCmd;
 
-  const pyCode = `from openai import OpenAI\n\nclient = OpenAI(\n    base_url="${gwUrl}/v1",\n    api_key="${keyObj.token}"\n)\n\nres = client.chat.completions.create(\n    model="${keyObj.max_model_tier}",\n    messages=[{"role": "user", "content": "Hello!"}]\n)\nprint(res.choices[0].message.content)`;
+  const pyCode = `from openai import OpenAI\n\n# Choose the endpoint matching your agent location:\n# Internal Mesh:  ${tsUrl}\n# External Remote: ${cfUrl}\n\nclient = OpenAI(\n    base_url="${cfUrl}",  # Switch to "${tsUrl}" if on internal network\n    api_key="${keyObj.token}"\n)\n\nres = client.chat.completions.create(\n    model="${modelTier}",\n    messages=[{"role": "user", "content": "Hello!"}]\n)\nprint(res.choices[0].message.content)`;
   document.getElementById("revealed-ext-key-py").innerText = pyCode;
+
+  currentRevealedExtBundle = {
+    name: keyObj.name || "External Key",
+    token: keyObj.token,
+    id: keyObj.id,
+    project_name: keyObj.project_name || keyObj.project_id || "Default",
+    max_tier: modelTier,
+    daily_limit_usd: keyObj.daily_limit_usd,
+    tailscale_address: tsUrl,
+    cloudflare_dns_url: cfUrl,
+  };
+
   document.getElementById("modal-ext-key-revealed").classList.remove("hidden");
 }
 
 function copyExtKeyCurl(token, tier) {
-  const gwUrl = currentGatewayInfo?.effective_gateway_url || "http://localhost:8660";
-  const curlCmd = `curl -X POST ${gwUrl}/v1/chat/completions \\\n  -H "Authorization: Bearer ${token}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "${tier}", "messages": [{"role": "user", "content": "Hello!"}]}'`;
+  const tsUrl = "http://100.99.202.75:8660/v1";
+  const cfUrl = currentGatewayInfo?.effective_gateway_url ? `${currentGatewayInfo.effective_gateway_url}/v1` : "https://worship-him-knight-jul.trycloudflare.com/v1";
+  const curlCmd = `# 1. Internal Agent (Tailscale Address):\ncurl -X POST ${tsUrl}/chat/completions \\\n  -H "Authorization: Bearer ${token}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "${tier}", "messages": [{"role": "user", "content": "Hello!"}]}'\n\n# 2. External Agent (Cloudflare DNS URL):\ncurl -X POST ${cfUrl}/chat/completions \\\n  -H "Authorization: Bearer ${token}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "${tier}", "messages": [{"role": "user", "content": "Hello!"}]}'`;
   navigator.clipboard.writeText(curlCmd);
-  showToast("cURL command copied to clipboard!", "success");
+  showToast("cURL commands (Tailscale + Cloudflare) copied to clipboard!", "success");
 }
 
 

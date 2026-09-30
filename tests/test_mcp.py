@@ -8,8 +8,7 @@ import json
 from pathlib import Path
 
 # Fix Windows console UTF-8 encoding
-if hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+# Windows UTF-8 stdout wrapper removed for pytest compatibility
 
 # Add project root
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

@@ -494,7 +494,7 @@
             <option value="Agents">Agents</option>
             <option value="Production">Production</option>
             <option value="Testing">Testing</option>
-            <option value="Telegram">Telegram</option>
+            <option value="External">External</option>
           </select>
         </div>
 
@@ -577,6 +577,29 @@
             <input type="text" id="revealed-key-id" class="form-control mono text-sm" readonly />
             <button class="btn btn-secondary copy-btn" data-copy-target="revealed-key-id">📋 Copy ID</button>
           </div>
+        </div>
+
+        <div class="card-section-divider my-3"></div>
+        <h4 class="text-sm font-semibold text-accent mb-2">🌐 Connection Endpoints for Receiving Agents</h4>
+
+        <div class="form-group mb-2">
+          <label class="form-label text-xs">Tailscale Address (Internal Agents / Mesh)</label>
+          <div class="copy-input-row">
+            <input type="text" id="revealed-key-tailscale" class="form-control mono text-xs" readonly />
+            <button class="btn btn-xs btn-secondary copy-btn" data-copy-target="revealed-key-tailscale">📋 Copy</button>
+          </div>
+        </div>
+
+        <div class="form-group mb-3">
+          <label class="form-label text-xs">Cloudflare DNS URL (External Agents / Remote)</label>
+          <div class="copy-input-row">
+            <input type="text" id="revealed-key-cloudflare" class="form-control mono text-xs" readonly />
+            <button class="btn btn-xs btn-secondary copy-btn" data-copy-target="revealed-key-cloudflare">📋 Copy</button>
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <button class="btn btn-sm btn-primary w-full" id="btn-copy-revealed-key-bundle">📦 Copy Full Agent Bundle (Key + Both Endpoints)</button>
         </div>
 
         <div class="form-group">
@@ -864,7 +887,7 @@
                 <option value="Default">Default</option>
                 <option value="Production">Production</option>
                 <option value="Testing">Testing</option>
-                <option value="Telegram">Telegram</option>
+                <option value="External">External</option>
               </select>
             </div>
           </div>
@@ -898,8 +921,10 @@
               <div class="flex gap-2">
                 <button class="btn btn-xs btn-secondary" id="btn-copy-all-batch-keys">📋 Copy All Keys</button>
                 <button class="btn btn-xs btn-outline" id="btn-copy-batch-keys-env">📜 Copy .env Snippet</button>
+                <button class="btn btn-xs btn-primary" id="btn-copy-batch-keys-bundle">🌐 Copy Full Bundle</button>
               </div>
             </div>
+            <div id="batch-key-endpoints-info" class="code-box mono text-xs mb-2"></div>
             <div class="code-box-scroll mono text-xs mb-3" id="batch-keys-output-list"></div>
           </div>
         </div>
@@ -926,7 +951,7 @@
             <button class="btn btn-secondary btn-sm" id="btn-copy-report">📋 Copy Markdown</button>
           </div>
           <div>
-            <button class="btn btn-primary btn-sm" id="btn-send-report-tg">✈️ Send to Telegram</button>
+            <button class="btn btn-primary btn-sm" id="btn-send-report-tg">🚀 Dispatch Notification</button>
           </div>
         </div>
         <pre id="report-content-pre" class="code-block-large">Loading daily report...</pre>
@@ -1196,7 +1221,7 @@
       </div>
       <div class="modal-body">
         <div class="alert-box-success mb-3">
-          <strong>External Key Active:</strong> Use this key or pairing code to access gated inference via Cloudflare DNS.
+          <strong>External Key Active:</strong> Deliver this token together with the Tailscale address (for internal mesh agents) and Cloudflare DNS URL (for external clients).
         </div>
 
         <div class="form-group">
@@ -1207,16 +1232,43 @@
           </div>
         </div>
 
-        <div class="form-group">
-          <label class="form-label">cURL Command</label>
-          <div class="code-box-scroll mono text-xs" id="revealed-ext-key-curl"></div>
-          <button class="btn btn-xs btn-outline copy-btn mt-2" data-copy-target="revealed-ext-key-curl">📋 Copy cURL</button>
+        <div class="card-section-divider my-3"></div>
+        <h4 class="text-sm font-semibold text-accent mb-2">🌐 Connection Endpoints for Receiving Agents</h4>
+
+        <div class="form-group mb-2">
+          <label class="form-label text-xs">Tailscale Address (Internal Agents / Mesh)</label>
+          <div class="copy-input-row">
+            <input type="text" id="revealed-ext-key-tailscale" class="form-control mono text-xs" readonly />
+            <button class="btn btn-xs btn-secondary copy-btn" data-copy-target="revealed-ext-key-tailscale">📋 Copy</button>
+          </div>
+        </div>
+
+        <div class="form-group mb-3">
+          <label class="form-label text-xs">Cloudflare DNS URL (External Agents / Remote)</label>
+          <div class="copy-input-row">
+            <input type="text" id="revealed-ext-key-cloudflare" class="form-control mono text-xs" readonly />
+            <button class="btn btn-xs btn-secondary copy-btn" data-copy-target="revealed-ext-key-cloudflare">📋 Copy</button>
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <button class="btn btn-sm btn-primary w-full" id="btn-copy-revealed-ext-bundle">📦 Copy Full Agent Bundle (Key + Both Endpoints)</button>
         </div>
 
         <div class="form-group">
-          <label class="form-label">Python OpenAI Client Snippet</label>
+          <div class="flex-between align-center mb-1">
+            <label class="form-label mb-0">cURL Commands (Internal & External)</label>
+            <button class="btn btn-xs btn-outline copy-btn" data-copy-target="revealed-ext-key-curl">📋 Copy cURL</button>
+          </div>
+          <pre class="code-box-scroll mono text-xs" id="revealed-ext-key-curl"></pre>
+        </div>
+
+        <div class="form-group">
+          <div class="flex-between align-center mb-1">
+            <label class="form-label mb-0">Python OpenAI Client Snippet</label>
+            <button class="btn btn-xs btn-outline copy-btn" data-copy-target="revealed-ext-key-py">📋 Copy Python</button>
+          </div>
           <pre class="code-box-scroll mono text-xs" id="revealed-ext-key-py"></pre>
-          <button class="btn btn-xs btn-outline copy-btn mt-2" data-copy-target="revealed-ext-key-py">📋 Copy Python</button>
         </div>
       </div>
       <div class="modal-footer">

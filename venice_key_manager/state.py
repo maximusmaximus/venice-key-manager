@@ -328,6 +328,51 @@ class StateStore:
         self._cloudflare_gateway_url = url.strip() if (url and url.strip()) else None
         self.save()
 
+    def get_network_endpoints(self) -> Dict[str, str]:
+        """Return both internal Tailscale address and external Cloudflare DNS gateway URL."""
+        import subprocess
+        import os
+
+        # 1. Resolve Tailscale IP
+        tailscale_ip = os.environ.get("TAILSCALE_IP") or os.environ.get("TAILSCALE_ADDRESS")
+        if not tailscale_ip:
+            try:
+                ip = subprocess.check_output(["tailscale", "ip", "-4"], timeout=2).decode().strip()
+                if ip:
+                    tailscale_ip = ip
+            except Exception:
+                pass
+        if not tailscale_ip:
+            tailscale_ip = "100.99.202.75"
+
+        port = getattr(config, "web_port", 8660) or 8660
+        tailscale_host = f"http://{tailscale_ip}:{port}"
+        tailscale_v1 = f"http://{tailscale_ip}:{port}/v1"
+
+        # 2. Resolve Cloudflare DNS Gateway URL
+        cf_url = self.get_cloudflare_gateway_url() or os.environ.get("CLOUDFLARE_GATEWAY_URL")
+        if not cf_url and os.path.exists("/opt/fleet/tunnel-url.txt"):
+            try:
+                u = open("/opt/fleet/tunnel-url.txt").read().strip()
+                if u.startswith("http"):
+                    cf_url = u
+            except Exception:
+                pass
+        if not cf_url:
+            cf_url = "https://worship-him-knight-jul.trycloudflare.com"
+
+        cf_clean = cf_url.rstrip("/")
+        cf_v1 = f"{cf_clean}/v1"
+
+        return {
+            "tailscale_ip": tailscale_ip,
+            "tailscale_address": tailscale_host,
+            "tailscale_v1_url": tailscale_v1,
+            "cloudflare_dns_url": cf_clean,
+            "cloudflare_v1_url": cf_v1,
+            "local_v1_url": f"http://127.0.0.1:{port}/v1",
+        }
+
     # =========================================================================
     # Projects & Allocations Management
     # =========================================================================
@@ -341,6 +386,8 @@ class StateStore:
         max_model_tier: str = "xl"
     ) -> Dict[str, Any]:
         self._load()
+        if not name or not str(name).strip():
+            raise ValueError("Project name is required and cannot be empty.")
         pid = f"proj_{secrets.token_hex(6)}"
         now = datetime.utcnow().isoformat() + "Z"
         today = datetime.utcnow().strftime("%Y-%m-%d")
@@ -476,6 +523,8 @@ class StateStore:
         parent_key_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         self._load()
+        if not name or not str(name).strip():
+            raise ValueError("Key name is required when creating an external key.")
         project = self.get_project(project_id)
         if not project:
             raise ValueError(f"Project with ID '{project_id}' not found.")
@@ -528,6 +577,8 @@ class StateStore:
     ) -> Dict[str, Any]:
         """Allow external users to create sub-keys with allocated spend per project per day or week."""
         self._load()
+        if not name or not str(name).strip():
+            raise ValueError("Sub-key name is required when creating a delegated sub-key.")
         parent = self.get_external_key(parent_key_or_token)
         if not parent:
             # Check if parent is a pairing token from auth_tokens

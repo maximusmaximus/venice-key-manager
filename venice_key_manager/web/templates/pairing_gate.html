@@ -25,48 +25,48 @@
         </div>
         <h2 class="auth-title">Venice Control Plane Locked</h2>
         <p class="auth-subtitle">
-          Device Pairing Required. This service cannot be loaded without an active Telegram pairing key.
+          Device Pairing Required. This service cannot be loaded without an active authorization pairing code.
         </p>
       </div>
 
       <div id="auth-error-banner" class="alert-banner alert-danger hidden mb-3">
         <span class="banner-icon">⚠️</span>
-        <span id="auth-error-text">Invalid or expired pairing key.</span>
+        <span id="auth-error-text">Invalid or expired pairing code.</span>
       </div>
 
       <form id="pairing-gate-form" class="auth-form" onsubmit="return false;">
         <div class="form-group">
-          <label class="form-label" for="auth-key-input">Telegram Pairing Key</label>
+          <label class="form-label" for="auth-key-input">Authorization Access Code</label>
           <div class="input-with-button">
             <input 
               type="text" 
               id="auth-key-input" 
               class="form-control mono" 
-              placeholder="vkm_tg_..." 
+              placeholder="vkm_code_..." 
               autocomplete="off" 
-              spellcheck="false"
+              spellcheck="false" 
               required 
             />
             <button type="submit" id="btn-submit-auth" class="btn btn-primary">
               Pair Device & Unlock 🔓
             </button>
           </div>
-          <p class="form-hint">Paste the key sent by @v3n15_bot or controller TG.</p>
+          <p class="form-hint">Paste your admin-issued access code or single-click magic link.</p>
         </div>
       </form>
 
       <div class="auth-instructions">
         <div class="instruction-step">
           <span class="step-num">1</span>
-          <span>Open Telegram and message <strong>@v3n15_bot</strong></span>
+          <span>Obtain an authorized pairing code or magic link from your administrator</span>
         </div>
         <div class="instruction-step">
           <span class="step-num">2</span>
-          <span>Tap <strong>[ 🌐 Web Dashboard ]</strong> or send <code>/dashboard</code></span>
+          <span>Open the single-click URL or enter your access code in the field above</span>
         </div>
         <div class="instruction-step">
           <span class="step-num">3</span>
-          <span>Open the single-click URL or paste the pairing key above</span>
+          <span>Click <strong>Pair Device & Unlock</strong> to authenticate your session</span>
         </div>
       </div>
 

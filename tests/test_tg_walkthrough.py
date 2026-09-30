@@ -16,8 +16,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 # Fix Windows console UTF-8 output
-if hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+# Windows UTF-8 stdout wrapper removed for pytest compatibility
 
 # Add project root
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

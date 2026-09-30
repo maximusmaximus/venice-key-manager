@@ -421,8 +421,11 @@ class VeniceMCPServer:
                 return json.dumps([k.model_dump() for k in keys], indent=2)
 
             elif name == "venice_create_key":
+                desc = args.get("description")
+                if not desc or not str(desc).strip():
+                    return json.dumps({"error": "Key name/description is required and cannot be empty. Prompt user to provide a name."})
                 req = KeyCreateRequest(
-                    description=args["description"],
+                    description=str(desc).strip(),
                     daily_usd=args.get("daily_usd"),
                     limitPeriod=args.get("limit_period", "EPOCH"),
                     apiKeyType=args.get("api_key_type", "INFERENCE"),
@@ -430,7 +433,14 @@ class VeniceMCPServer:
                     custom_threshold=args.get("custom_threshold")
                 )
                 res = await self.client.create_key(req)
-                return json.dumps(res.model_dump(), indent=2)
+                res_dict = res.model_dump()
+                endpoints = state_store.get_network_endpoints()
+                res_dict["endpoints"] = endpoints
+                res_dict["endpoints_delivery"] = {
+                    "tailscale_address": endpoints.get("tailscale_v1_url"),
+                    "cloudflare_dns_url": endpoints.get("cloudflare_v1_url")
+                }
+                return json.dumps(res_dict, indent=2)
 
             elif name == "venice_cycle_key":
                 req = KeyCycleRequest(
@@ -535,25 +545,33 @@ class VeniceMCPServer:
                 }, indent=2)
 
             elif name == "venice_create_batch_keys":
-                prefix = args["prefix"]
+                prefix = args.get("prefix")
+                if not prefix or not str(prefix).strip():
+                    return json.dumps({"error": "Key prefix/name is required and cannot be empty."})
                 count = int(args.get("count", 3))
                 daily_usd = args.get("daily_usd", 0.50)
                 category = args.get("category", "Default")
                 key_type = args.get("api_key_type", "INFERENCE")
                 limit_period = args.get("limit_period", "EPOCH")
                 keys = await self.client.create_batch_keys(
-                    prefix=prefix,
+                    prefix=str(prefix).strip(),
                     count=count,
                     daily_usd=daily_usd,
                     category=category,
                     api_key_type=key_type,
                     limit_period=limit_period,
                 )
+                endpoints = state_store.get_network_endpoints()
                 return json.dumps({
                     "status": "success",
                     "count": len(keys),
                     "prefix": prefix,
-                    "keys": [k.model_dump() for k in keys]
+                    "keys": [k.model_dump() for k in keys],
+                    "endpoints": endpoints,
+                    "endpoints_delivery": {
+                        "tailscale_address": endpoints.get("tailscale_v1_url"),
+                        "cloudflare_dns_url": endpoints.get("cloudflare_v1_url")
+                    }
                 }, indent=2)
 
             elif name == "venice_list_auth_tokens":
@@ -569,14 +587,16 @@ class VeniceMCPServer:
                 return json.dumps({"total": len(projects), "projects": projects}, indent=2)
 
             elif name == "venice_create_project":
-                name_val = args["name"]
+                name_val = args.get("name")
+                if not name_val or not str(name_val).strip():
+                    return json.dumps({"error": "Project name is required and cannot be empty. Prompt user to provide a name."})
                 desc = args.get("description", "")
                 daily = float(args.get("daily_limit_usd", 1.00))
                 weekly = float(args["weekly_limit_usd"]) if args.get("weekly_limit_usd") is not None else None
                 default_sub = float(args.get("default_sub_key_daily_usd", 0.25))
                 tier = args.get("max_model_tier", "xl")
                 proj = state_store.create_project(
-                    name=name_val,
+                    name=str(name_val).strip(),
                     description=desc,
                     daily_limit_usd=daily,
                     weekly_limit_usd=weekly,
@@ -599,9 +619,12 @@ class VeniceMCPServer:
                 return json.dumps({"total": len(ext_keys), "keys": ext_keys}, indent=2)
 
             elif name == "venice_create_external_key":
+                name_val = args.get("name")
+                if not name_val or not str(name_val).strip():
+                    return json.dumps({"error": "External key name is required and cannot be empty. Prompt user to provide a name."})
                 key_record = state_store.create_external_key(
                     project_id=args["project_id"],
-                    name=args["name"],
+                    name=str(name_val).strip(),
                     daily_limit_usd=args.get("daily_limit_usd"),
                     weekly_limit_usd=args.get("weekly_limit_usd"),
                     limit_period=args.get("limit_period", "DAY"),
@@ -611,25 +634,55 @@ class VeniceMCPServer:
                     created_by="mcp_admin",
                     key_type="ADMIN_EXTERNAL",
                 )
-                gw_url = state_store.get_cloudflare_gateway_url() or "http://localhost:8660"
-                key_record["curl_example"] = (
-                    f"curl -X POST {gw_url}/v1/chat/completions \\\n"
+                endpoints = state_store.get_network_endpoints()
+                key_record["endpoints"] = endpoints
+                key_record["tailscale_address"] = endpoints.get("tailscale_v1_url")
+                key_record["cloudflare_dns_url"] = endpoints.get("cloudflare_v1_url")
+                key_record["tailscale_curl_example"] = (
+                    f"curl -X POST {endpoints.get('tailscale_v1_url')}/chat/completions \\\n"
                     f"  -H 'Authorization: Bearer {key_record['token']}' \\\n"
                     f"  -H 'Content-Type: application/json' \\\n"
                     f"  -d '{{\"model\": \"{key_record['max_model_tier']}\", \"messages\": [{{\"role\": \"user\", \"content\": \"Hello!\"}}]}}'"
                 )
-                return json.dumps({"status": "success", "key": key_record}, indent=2)
+                key_record["cloudflare_curl_example"] = (
+                    f"curl -X POST {endpoints.get('cloudflare_v1_url')}/chat/completions \\\n"
+                    f"  -H 'Authorization: Bearer {key_record['token']}' \\\n"
+                    f"  -H 'Content-Type: application/json' \\\n"
+                    f"  -d '{{\"model\": \"{key_record['max_model_tier']}\", \"messages\": [{{\"role\": \"user\", \"content\": \"Hello!\"}}]}}'"
+                )
+                key_record["curl_example"] = key_record["cloudflare_curl_example"]
+                return json.dumps({"status": "success", "key": key_record, "endpoints": endpoints}, indent=2)
 
             elif name == "venice_create_sub_key":
+                name_val = args.get("name")
+                if not name_val or not str(name_val).strip():
+                    return json.dumps({"error": "Sub-key name is required and cannot be empty. Prompt user to provide a name."})
                 sub_key = state_store.create_sub_key(
                     parent_key_or_token=args["parent_key_or_token"],
-                    name=args["name"],
+                    name=str(name_val).strip(),
                     amount_usd=args.get("amount_usd", 0.25),
                     period=args.get("period", "DAY"),
                     max_model_tier=args.get("max_model_tier"),
                     notes=args.get("notes"),
                 )
-                return json.dumps({"status": "success", "sub_key": sub_key}, indent=2)
+                endpoints = state_store.get_network_endpoints()
+                sub_key["endpoints"] = endpoints
+                sub_key["tailscale_address"] = endpoints.get("tailscale_v1_url")
+                sub_key["cloudflare_dns_url"] = endpoints.get("cloudflare_v1_url")
+                sub_key["tailscale_curl_example"] = (
+                    f"curl -X POST {endpoints.get('tailscale_v1_url')}/chat/completions \\\n"
+                    f"  -H 'Authorization: Bearer {sub_key['token']}' \\\n"
+                    f"  -H 'Content-Type: application/json' \\\n"
+                    f"  -d '{{\"model\": \"{sub_key['max_model_tier']}\", \"messages\": [{{\"role\": \"user\", \"content\": \"Hello!\"}}]}}'"
+                )
+                sub_key["cloudflare_curl_example"] = (
+                    f"curl -X POST {endpoints.get('cloudflare_v1_url')}/chat/completions \\\n"
+                    f"  -H 'Authorization: Bearer {sub_key['token']}' \\\n"
+                    f"  -H 'Content-Type: application/json' \\\n"
+                    f"  -d '{{\"model\": \"{sub_key['max_model_tier']}\", \"messages\": [{{\"role\": \"user\", \"content\": \"Hello!\"}}]}}'"
+                )
+                sub_key["curl_example"] = sub_key["cloudflare_curl_example"]
+                return json.dumps({"status": "success", "sub_key": sub_key, "endpoints": endpoints}, indent=2)
 
             elif name == "venice_modify_external_key_allocation":
                 kid = args["key_id"]
@@ -648,9 +701,11 @@ class VeniceMCPServer:
 
             elif name == "venice_get_gateway_info":
                 gw_url = state_store.get_cloudflare_gateway_url() or "http://localhost:8660"
+                endpoints = state_store.get_network_endpoints()
                 return json.dumps({
                     "cloudflare_gateway_url": state_store.get_cloudflare_gateway_url(),
                     "effective_gateway_url": gw_url,
+                    "endpoints": endpoints,
                     "tiers": MODEL_TIER_MAPPING,
                     "tier_order": MODEL_TIER_ORDER,
                     "total_projects": len(state_store.list_projects()),
