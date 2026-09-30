@@ -227,16 +227,28 @@ body {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 24px;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
 .alert-content {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex: 1;
+  min-width: 320px;
+}
+
+.alert-action-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .alert-icon { font-size: 20px; }
-.alert-text { font-size: 13px; color: #fde68a; }
+.alert-text { font-size: 13px; color: #fde68a; line-height: 1.5; }
 
 /* Tabs */
 .tab-bar {

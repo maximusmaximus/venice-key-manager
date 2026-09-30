@@ -81,14 +81,19 @@
     </section>
 
     <!-- Admin Key Alert Banner (if Admin key is not set) -->
-    <div id="admin-alert-banner" class="alert-banner hidden">
+    <div id="admin-alert-banner" class="alert-banner">
       <div class="alert-content">
         <span class="alert-icon">⚠️</span>
         <div class="alert-text">
           <strong>Venice Admin API Key Needed for Key Issuance:</strong> Currently using an Inference Key. Rate limits, live balances ($5.00), and inference are functional. To generate or revoke keys via API, enter your Venice Admin Key.
         </div>
       </div>
-      <button class="btn btn-sm btn-primary" onclick="openModal('modal-settings')">Set Admin Key</button>
+      <div class="alert-action-group">
+        <input type="password" id="banner-admin-key-input" class="input-field" placeholder="Paste Venice Admin Key here..." style="width: 290px; padding: 7px 12px; font-size: 13px;" autocomplete="off">
+        <button class="btn btn-sm btn-primary" id="btn-save-banner-admin-key" style="white-space: nowrap;">
+          <span>💾</span> Save Admin Key
+        </button>
+      </div>
     </div>
 
     <!-- Navigation Tabs -->

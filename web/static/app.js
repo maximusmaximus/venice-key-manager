@@ -595,6 +595,53 @@ function initForms() {
       showToast(`Error: ${err.message}`, "error");
     }
   });
+
+  // Save Admin Key directly from top alert banner
+  const btnSaveBannerAdmin = document.getElementById("btn-save-banner-admin-key");
+  const inputBannerAdmin = document.getElementById("banner-admin-key-input");
+
+  if (btnSaveBannerAdmin && inputBannerAdmin) {
+    const submitBannerAdminKey = async () => {
+      const key = inputBannerAdmin.value.trim();
+      if (!key) {
+        showToast("Please enter or paste your Venice Admin Key", "error");
+        inputBannerAdmin.focus();
+        return;
+      }
+
+      btnSaveBannerAdmin.disabled = true;
+      btnSaveBannerAdmin.innerHTML = `<span>⏳</span> Saving...`;
+
+      try {
+        const res = await fetch("/api/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ admin_key: key })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast("Venice Admin Key saved! Remote key issuance unlocked.");
+          inputBannerAdmin.value = "";
+          refreshAll();
+        } else {
+          showToast(`Failed: ${data.error}`, "error");
+        }
+      } catch (err) {
+        showToast(`Error: ${err.message}`, "error");
+      } finally {
+        btnSaveBannerAdmin.disabled = false;
+        btnSaveBannerAdmin.innerHTML = `<span>💾</span> Save Admin Key`;
+      }
+    };
+
+    btnSaveBannerAdmin.addEventListener("click", submitBannerAdminKey);
+    inputBannerAdmin.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        submitBannerAdminKey();
+      }
+    });
+  }
 }
 
 // --- Inference Sandbox ---
