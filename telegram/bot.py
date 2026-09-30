@@ -75,7 +75,12 @@ class VeniceTelegramBot:
         }
         if reply_markup:
             payload["reply_markup"] = reply_markup
-        return self._send_request("sendMessage", payload)
+        res = self._send_request("sendMessage", payload)
+        if not res.get("ok") and "can't parse entities" in res.get("description", "").lower():
+            logger.warning("Markdown entity parse error; retrying sendMessage as plain text...")
+            payload.pop("parse_mode", None)
+            res = self._send_request("sendMessage", payload)
+        return res
 
     def edit_message(
         self,
@@ -93,7 +98,12 @@ class VeniceTelegramBot:
         }
         if reply_markup:
             payload["reply_markup"] = reply_markup
-        return self._send_request("editMessageText", payload)
+        res = self._send_request("editMessageText", payload)
+        if not res.get("ok") and "can't parse entities" in res.get("description", "").lower():
+            logger.warning("Markdown entity parse error; retrying editMessageText as plain text...")
+            payload.pop("parse_mode", None)
+            res = self._send_request("editMessageText", payload)
+        return res
 
     def answer_callback(self, callback_query_id: str, text: str = "", show_alert: bool = False):
         self._send_request("answerCallbackQuery", {
@@ -1187,6 +1197,9 @@ class VeniceTelegramBot:
                 "⚡ *Venice & TG Engine Commands*:\n\n"
                 "• `/menu` or `/start` - Open interactive control dashboard\n"
                 "• `/provision` - Open Agent Key (XS-XL) Provisioning Wizard\n"
+                "• `/allocations` - View or mint Cloud DNS claim allocations\n"
+                "• `/subkeys` - List active provisioned agent sub-keys\n"
+                "• `/pair_code` - View browser machine pairing code\n"
                 "• `/service_status` - Check auto-restart watchdog & boot daemon\n"
                 "• `/restart_service` - Remotely recycle and restart the service\n"
                 "• `/backup_vault` - Create instant snapshot and sync all backup mirrors\n"
@@ -1202,6 +1215,37 @@ class VeniceTelegramBot:
                 "• `/help` - Show this guide"
             )
             self.send_message(chat_id, txt)
+
+        else:
+            # Handle natural language inquiries or conversational text via Venice AI
+            logger.info(f"Processing natural language message from {chat_id}: {text[:60]}")
+            client = self._get_venice_client()
+            ai_prompt = (
+                f"You are v3n15PE_bot, the autonomous agent assistant and fleet controller for the Venice Key Manager. "
+                f"You assist the user with Venice.ai API keys, model quality tiers (XS to XL), Cloud DNS key allocation links "
+                f"(venice.vmu.cash/claim/...), USD/DIEM balance tracking, fleet nodes (Local Host, mcmini), and service management.\n\n"
+                f"User asked: {text}\n\n"
+                f"Answer concisely in friendly Markdown. If they asked what you can do or how to use you, summarize your key capabilities "
+                f"and invite them to use the interactive buttons below or type /menu."
+            )
+            res = client.test_inference(prompt=ai_prompt, model="deepseek-v4-flash")
+            if res.get("success") and res.get("reply"):
+                reply_txt = res.get("reply")
+                self.send_message(chat_id, reply_txt, reply_markup=self.main_menu_keyboard())
+            else:
+                fallback_txt = (
+                    "👋 *Venice Key Manager & Agent Controller*\n\n"
+                    "Here is what I can do for you:\n"
+                    "• ➕ *Provision Agent Keys*: Mint quality-tiered sub-keys (XS to XL) with custom budget caps\n"
+                    "• 🌐 *Cloud DNS Allocations*: Mint shareable `venice.vmu.cash/claim/...` links for swarm agents\n"
+                    "• ⚡ *Tier Inference*: Test models across 5 tiers (Flash, Llama 70B, DeepSeek R1, 405B)\n"
+                    "• 💰 *Balances*: View real-time USD and DIEM quotas\n"
+                    "• 🤖 *Agent TG Bots*: Register, test, and manage autonomous agent bots\n"
+                    "• 🛡️ *Service & Disaster Recovery*: Check auto-restart status, backup & recall vault mirrors\n"
+                    "• 🌐 *Fleet Mesh*: Sync and manage connected nodes (Local Host, McMini)\n\n"
+                    "Tap any button below to open the dashboard, or type `/help` for commands."
+                )
+                self.send_message(chat_id, fallback_txt, reply_markup=self.main_menu_keyboard())
 
     # --- Polling Loop ---
 
