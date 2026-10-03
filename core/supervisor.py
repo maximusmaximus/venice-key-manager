@@ -175,14 +175,24 @@ class ServiceSupervisor:
             spawn_time = time.time()
             self.log(f"Starting child process...")
 
+            child_log_file = None
             try:
+                child_log_path = self.root_dir / ".child_service.log"
+                child_log_file = open(child_log_path, "a", encoding="utf-8", errors="replace", buffering=1)
                 proc = subprocess.Popen(
                     child_args,
                     cwd=str(self.root_dir),
-                    stdin=subprocess.DEVNULL
+                    stdin=subprocess.DEVNULL,
+                    stdout=child_log_file,
+                    stderr=subprocess.STDOUT
                 )
             except Exception as e:
                 self.log(f"❌ Failed to spawn child process: {e}")
+                if child_log_file:
+                    try:
+                        child_log_file.close()
+                    except Exception:
+                        pass
                 time.sleep(5)
                 continue
 
@@ -201,6 +211,11 @@ class ServiceSupervisor:
                     except Exception:
                         try:
                             proc.kill()
+                        except Exception:
+                            pass
+                    if child_log_file:
+                        try:
+                            child_log_file.close()
                         except Exception:
                             pass
                     state["status"] = "STOPPED"
@@ -224,11 +239,21 @@ class ServiceSupervisor:
                             proc.kill()
                         except Exception:
                             pass
+                    if child_log_file:
+                        try:
+                            child_log_file.close()
+                        except Exception:
+                            pass
                     break  # Break inner loop to spawn new child
 
                 # Check child status
                 ret = proc.poll()
                 if ret is not None:
+                    if child_log_file:
+                        try:
+                            child_log_file.close()
+                        except Exception:
+                            pass
                     duration = time.time() - spawn_time
                     self.log(f"⚠️ Child process (PID: {proc.pid}) exited with code {ret} after {duration:.1f}s.")
 
