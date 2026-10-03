@@ -397,6 +397,12 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             tier = rate_res.get("apiTier", {}) if rate_res.get("success") else {}
             next_epoch = rate_res.get("nextEpochBegins") if rate_res.get("success") else None
 
+            thresholds = self.vault.get_balance_thresholds()
+            bal_status = client.check_balance_status(
+                low_threshold_usd=thresholds.get("low_usd", 1.0),
+                out_threshold_usd=thresholds.get("out_usd", 0.05)
+            )
+
             # Get registered keys and agent bots
             vault_keys = self.vault.get_venice_keys()
             agent_bots = self.vault.get_agent_bots()
@@ -404,6 +410,12 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({
                 "success": True,
                 "balances": balances,
+                "balance_status": bal_status.get("status", "HEALTHY"),
+                "badge": bal_status.get("badge", "🟢 HEALTHY"),
+                "is_low": bal_status.get("is_low", False),
+                "is_out": bal_status.get("is_out", False),
+                "warning": bal_status.get("warning"),
+                "recharge_url": bal_status.get("recharge_url", "https://venice.ai/settings/api"),
                 "apiTier": tier,
                 "nextEpochBegins": next_epoch,
                 "has_admin_key": bool(self.vault.get_venice_admin_key()),

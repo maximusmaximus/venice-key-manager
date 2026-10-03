@@ -509,13 +509,35 @@ class VeniceMCPServer:
 
         if name == "venice_get_balances_and_tier":
             key = args.get("api_key")
+            thresholds = self.vault.get_balance_thresholds()
+            status_info = client.check_balance_status(
+                key=key,
+                low_threshold_usd=thresholds.get("low_usd", 1.0),
+                out_threshold_usd=thresholds.get("out_usd", 0.05)
+            )
             res = client.get_rate_limits(key=key)
             if res.get("success"):
                 return {
                     "balances": res.get("balances"),
                     "apiTier": res.get("apiTier"),
                     "keyExpiration": res.get("keyExpiration"),
-                    "nextEpochBegins": res.get("nextEpochBegins")
+                    "nextEpochBegins": res.get("nextEpochBegins"),
+                    "status": status_info.get("status", "HEALTHY"),
+                    "is_low": status_info.get("is_low", False),
+                    "is_out": status_info.get("is_out", False),
+                    "badge": status_info.get("badge", "🟢 HEALTHY"),
+                    "warning": status_info.get("warning"),
+                    "recharge_url": status_info.get("recharge_url", "https://venice.ai/settings/api")
+                }
+            if status_info.get("status") == "OUT":
+                return {
+                    "balances": {"USD": 0.0, "DIEM": 0.0},
+                    "status": "OUT",
+                    "is_low": False,
+                    "is_out": True,
+                    "badge": "🔴 OUT OF CREDITS",
+                    "error": "Insufficient USD or Diem balance. Visit https://venice.ai/settings/api to add credits.",
+                    "recharge_url": "https://venice.ai/settings/api"
                 }
             return {"error": res.get("error")}
 
@@ -569,7 +591,23 @@ class VeniceMCPServer:
             prompt = args.get("prompt")
             model = args.get("model", "deepseek-v4-flash")
             max_t = args.get("max_tokens", 100)
-            return client.test_inference(prompt=prompt, model=model, max_tokens=max_t)
+            thresholds = self.vault.get_balance_thresholds()
+            bal_status = client.check_balance_status(
+                low_threshold_usd=thresholds.get("low_usd", 1.0),
+                out_threshold_usd=thresholds.get("out_usd", 0.05)
+            )
+            if bal_status.get("is_out"):
+                return {
+                    "success": False,
+                    "out_of_credits": True,
+                    "status_code": 402,
+                    "error": "Insufficient USD or Diem balance to complete inference request. Visit https://venice.ai/settings/api to add credits.",
+                    "recharge_url": "https://venice.ai/settings/api"
+                }
+            res = client.test_inference(prompt=prompt, model=model, max_tokens=max_t)
+            if res.get("success") and bal_status.get("is_low"):
+                res["warning"] = bal_status.get("warning")
+            return res
 
         elif name == "tg_list_agent_bots":
             chk = args.get("check_live", False)

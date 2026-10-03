@@ -83,16 +83,28 @@ def handle_cli_commands(args):
 
     if args.command == "venice":
         if args.subcommand == "balance":
+            thresholds = vault.get_balance_thresholds()
+            status_info = client.check_balance_status(
+                low_threshold_usd=thresholds.get("low_usd", 1.0),
+                out_threshold_usd=thresholds.get("out_usd", 0.05)
+            )
             res = client.get_rate_limits()
             if res.get("success"):
                 b = res.get("balances", {})
                 t = res.get("apiTier", {})
+                usd = float(b.get("USD", 0) or 0)
                 print(f"\n💰 Venice.ai Account Balances:")
-                print(f"  USD Balance:      ${b.get('USD', 0):.2f}")
+                print(f"  Health Status:    {status_info.get('badge')}")
+                print(f"  USD Balance:      ${usd:.4f}")
                 print(f"  DIEM Token:       {b.get('DIEM', 0):.2f}")
                 print(f"  Bundled Credits:  {b.get('BUNDLED_CREDITS', 0)}")
                 print(f"  Subscription Tier: {t.get('id', 'paid').upper()}")
-                print(f"  Next Reset Epoch:  {res.get('nextEpochBegins')}\n")
+                print(f"  Next Reset Epoch:  {res.get('nextEpochBegins')}")
+                if status_info.get("warning"):
+                    print(f"  ⚠️ Warning:       {status_info.get('warning')}")
+                    print(f"  👉 Top up:        {status_info.get('recharge_url')}\n")
+                else:
+                    print()
             else:
                 print(f"\n❌ Error fetching balances: {res.get('error')}\n")
 

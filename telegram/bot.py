@@ -46,6 +46,10 @@ class VeniceTelegramBot:
         self.api_url = f"https://api.telegram.org/bot{self.token}"
         self.running = False
         self.last_update_id = 0
+        self.last_balance_check_time = 0.0
+        self.balance_check_interval = 600  # Check every 10 minutes
+        last_alert = self.vault.get_last_balance_alert_state()
+        self.last_notified_balance_status = last_alert.get("status")
 
     def _get_venice_client(self) -> VeniceClient:
         return VeniceClient(
@@ -53,6 +57,85 @@ class VeniceTelegramBot:
             inference_key=self.vault.get_venice_inference_key(),
             base_url=self.vault.data.get("venice", {}).get("base_url", "")
         )
+
+    def check_and_notify_balance(self, force: bool = False) -> Dict[str, Any]:
+        """
+        Monitors Venice inference balance and automatically dispatches Telegram alerts
+        when credits become LOW, OUT, or are RESTORED.
+        """
+        self.last_balance_check_time = time.time()
+        client = self._get_venice_client()
+        thresholds = self.vault.get_balance_thresholds()
+        low_usd = thresholds.get("low_usd", 1.0)
+        out_usd = thresholds.get("out_usd", 0.05)
+
+        status_info = client.check_balance_status(
+            low_threshold_usd=low_usd,
+            out_threshold_usd=out_usd
+        )
+        if not status_info.get("success") and status_info.get("status") == "UNKNOWN":
+            return status_info
+
+        current_status = status_info.get("status", "HEALTHY")
+        last_status = self.last_notified_balance_status
+        usd = status_info.get("usd", 0.0)
+        diem = status_info.get("diem", 0.0)
+        tier = status_info.get("api_tier", "paid")
+
+        should_alert = False
+        alert_text = None
+
+        if last_status is None:
+            self.last_notified_balance_status = current_status
+            self.vault.set_last_balance_alert_state(current_status, usd)
+            if current_status in ("LOW", "OUT"):
+                should_alert = True
+        elif current_status != last_status or force:
+            should_alert = True
+
+        if should_alert and self.authorized_chat_id:
+            if current_status == "OUT":
+                alert_text = (
+                    "🔴 *Venice.ai Inference Alert: Credits Depleted!*\n\n"
+                    f"• *USD Balance*: `${usd:.4f}`\n"
+                    f"• *DIEM Balance*: `{diem:.2f}`\n"
+                    f"• *Status*: `🔴 DEPLETED / OUT OF CREDITS`\n\n"
+                    "⚠️ *Impact*: AI inference (`/ask`, `/ask_tier`, and conversational chat) is paused due to HTTP 402 Insufficient Balance.\n\n"
+                    "👉 *Add credits*: [venice.ai/settings/api](https://venice.ai/settings/api)\n\n"
+                    "⚡ *Local Services Unaffected*: Plain text key creation (`make a key for <agent>`), agent sub-keys, and Cloud DNS allocation claim links remain 100% operational locally!"
+                )
+            elif current_status == "LOW":
+                alert_text = (
+                    "🟡 *Venice.ai Inference Warning: Credits Running Low!*\n\n"
+                    f"• *USD Balance*: `${usd:.4f}` (Warning threshold: `< ${low_usd:.2f}`)\n"
+                    f"• *DIEM Balance*: `{diem:.2f}`\n"
+                    f"• *Status*: `🟡 LOW CREDITS`\n\n"
+                    "👉 *Top-up*: [venice.ai/settings/api](https://venice.ai/settings/api) to avoid AI inference disruption."
+                )
+            elif current_status == "HEALTHY" and last_status in ("LOW", "OUT"):
+                alert_text = (
+                    "🟢 *Venice.ai Inference Alert: Credits Restored!*\n\n"
+                    f"• *USD Balance*: `${usd:.4f}`\n"
+                    f"• *DIEM Balance*: `{diem:.2f}`\n"
+                    f"• *Tier*: `{tier.upper()}`\n"
+                    f"• *Status*: `🟢 HEALTHY / FULLY OPERATIONAL`\n\n"
+                    "AI inference and autonomous agents are fully operational!"
+                )
+
+            if alert_text:
+                kb = {
+                    "inline_keyboard": [
+                        [{"text": "💳 Venice Billing Settings", "url": "https://venice.ai/settings/api"}],
+                        [{"text": "📊 Check Balance", "callback_data": "menu_balance"}]
+                    ]
+                }
+                self.send_message(self.authorized_chat_id, alert_text, reply_markup=kb)
+                logger.info(f"Dispatched balance alert [{current_status}] to chat {self.authorized_chat_id}")
+
+            self.last_notified_balance_status = current_status
+            self.vault.set_last_balance_alert_state(current_status, usd)
+
+        return status_info
 
     def _send_request(self, method: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         url = f"{self.api_url}/{method}"
@@ -163,35 +246,43 @@ class VeniceTelegramBot:
 
     def render_dashboard_text(self) -> str:
         client = self._get_venice_client()
+        thresholds = self.vault.get_balance_thresholds()
+        bal_status = client.check_balance_status(
+            low_threshold_usd=thresholds.get("low_usd", 1.0),
+            out_threshold_usd=thresholds.get("out_usd", 0.05)
+        )
         rate_res = client.get_rate_limits()
         has_admin = bool(self.vault.get_venice_admin_key())
 
-        usd_bal = "0.00"
-        diem_bal = "0.00"
-        tier = "PAID"
+        usd_bal = f"{bal_status.get('usd', 0.0):.4f}"
+        diem_bal = f"{bal_status.get('diem', 0.0):.2f}"
+        tier = bal_status.get("api_tier", "paid").upper()
         epoch_str = "Active"
-
-        if rate_res.get("success"):
-            balances = rate_res.get("balances", {})
-            usd_bal = f"{balances.get('USD', 0):.2f}"
-            diem_bal = f"{balances.get('DIEM', 0):.2f}"
-            tier = rate_res.get("apiTier", {}).get("id", "paid").upper()
-            if rate_res.get("nextEpochBegins"):
-                epoch_str = rate_res.get("nextEpochBegins")[:10]
+        if rate_res.get("success") and rate_res.get("nextEpochBegins"):
+            epoch_str = rate_res.get("nextEpochBegins")[:10]
 
         agent_count = len(self.vault.get_agent_bots())
         keys_count = len(self.vault.get_venice_keys())
         fleet_nodes = self.mesh.list_nodes(check_health=False)
+        badge = bal_status.get("badge", "🟢 HEALTHY")
+
+        recharge_banner = ""
+        if bal_status.get("is_out"):
+            recharge_banner = "\n🚨 *Venice AI Credits Depleted!* Inference paused. Top up at [venice.ai/settings/api](https://venice.ai/settings/api)\n"
+        elif bal_status.get("is_low"):
+            recharge_banner = f"\n⚠️ *Venice AI Credits Low* (< ${thresholds.get('low_usd', 1.0):.2f}). Top up: [venice.ai/settings/api](https://venice.ai/settings/api)\n"
 
         return (
             f"⚡ *VENICE & TG KEY ENGINE // CONTROLLER*\n\n"
+            f"• *Inference Credits*: {badge}\n"
             f"• *USD Balance*: `${usd_bal}`\n"
             f"• *DIEM Balance*: `{diem_bal} DIEM`\n"
             f"• *Account Tier*: `{tier}` (Epoch: `{epoch_str}`)\n"
             f"• *Admin Key*: `{'CONFIGURED ✅' if has_admin else 'NOT SET ⚠️ (Inference Mode)'}`\n"
             f"• *Registered Agent Bots*: `{agent_count}`\n"
             f"• *Managed Venice Keys*: `{keys_count}`\n"
-            f"• *A2A Fleet Mesh*: `{len(fleet_nodes)} node(s) configured`\n\n"
+            f"• *A2A Fleet Mesh*: `{len(fleet_nodes)} node(s) configured`\n"
+            f"{recharge_banner}\n"
             f"Tap an interactive button below to manage keys, trigger inference, or inspect agents:"
         )
 
@@ -216,6 +307,11 @@ class VeniceTelegramBot:
 
         elif data == "menu_balance":
             self.answer_callback(cb_id)
+            thresholds = self.vault.get_balance_thresholds()
+            bal_status = client.check_balance_status(
+                low_threshold_usd=thresholds.get("low_usd", 1.0),
+                out_threshold_usd=thresholds.get("out_usd", 0.05)
+            )
             res = client.get_rate_limits()
             if res.get("success"):
                 balances = res.get("balances", {})
@@ -225,19 +321,34 @@ class VeniceTelegramBot:
                 tier = res.get("apiTier", {})
                 exp = res.get("keyExpiration") or "Unlimited"
                 epoch = res.get("nextEpochBegins") or "N/A"
+                badge = bal_status.get("badge", "🟢 HEALTHY")
+
+                warn_line = ""
+                if bal_status.get("is_out"):
+                    warn_line = "\n🔴 *ALERT: Credits depleted! Inference is paused.*"
+                elif bal_status.get("is_low"):
+                    warn_line = f"\n🟡 *WARNING: Credits running low (< ${thresholds.get('low_usd', 1.0):.2f}).*"
 
                 txt = (
                     f"💰 *Venice.ai Account Balances*\n\n"
-                    f"• *USD Balance*: `${usd:.2f}`\n"
+                    f"• *Status*: {badge}{warn_line}\n"
+                    f"• *USD Balance*: `${usd:.4f}`\n"
                     f"• *DIEM Token*: `{diem:.2f}`\n"
                     f"• *Bundled Credits*: `{bundled}`\n"
                     f"• *Tier ID*: `{tier.get('id', 'paid')}` (Charged: `{tier.get('isCharged')}`)\n"
                     f"• *Key Expiration*: `{exp}`\n"
-                    f"• *Next Reset Epoch*: `{epoch}`"
+                    f"• *Next Reset Epoch*: `{epoch}`\n\n"
+                    f"⚡ Local Key Management & Swarm Provisioning remain 100% operational!"
                 )
             else:
                 txt = f"❌ *Failed to fetch balances*: `{res.get('error')}`"
-            self.edit_message(chat_id, msg_id, txt, reply_markup=self.back_to_main_keyboard())
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "💳 Add Credits (venice.ai)", "url": "https://venice.ai/settings/api"}],
+                    [{"text": "« Back to Main Dashboard", "callback_data": "menu_main"}]
+                ]
+            }
+            self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
 
         elif data == "menu_keys":
             self.answer_callback(cb_id)
@@ -1189,23 +1300,47 @@ class VeniceTelegramBot:
 
     def _handle_balance_command(self, chat_id: str):
         client = self._get_venice_client()
-        res = client.get_rate_limits()
-        if res.get("success"):
-            b = res.get("balances", {})
-            t = res.get("apiTier", {})
-            usd = b.get("USD", 0)
-            diem = b.get("DIEM", 0)
-            status_note = " (⚠️ Low Balance)" if usd < 0.10 and diem <= 0 else ""
-            txt = (
-                f"💰 *Venice.ai Account Balances*:\n\n"
-                f"• *USD Balance*: `${usd:.4f}`{status_note}\n"
-                f"• *DIEM Token*: `{diem:.2f}`\n"
-                f"• *Tier*: `{t.get('id', 'paid').upper()}`\n\n"
-                f"Local Key Management and Agent Swarm Allocation remain fully operational!"
+        thresholds = self.vault.get_balance_thresholds()
+        bal_status = client.check_balance_status(
+            low_threshold_usd=thresholds.get("low_usd", 1.0),
+            out_threshold_usd=thresholds.get("out_usd", 0.05)
+        )
+        badge = bal_status.get("badge", "🟢 HEALTHY")
+        usd = bal_status.get("usd", 0.0)
+        diem = bal_status.get("diem", 0.0)
+        tier = bal_status.get("api_tier", "paid").upper()
+
+        if bal_status.get("is_out"):
+            status_desc = (
+                "🔴 *STATUS: DEPLETED / OUT OF CREDITS*\n"
+                "⚠️ *AI inference requests will fail with HTTP 402 Insufficient Balance.*\n"
+                "👉 [Top up at venice.ai/settings/api](https://venice.ai/settings/api)"
+            )
+        elif bal_status.get("is_low"):
+            status_desc = (
+                f"🟡 *STATUS: LOW CREDITS* (< ${thresholds.get('low_usd', 1.0):.2f})\n"
+                "⚠️ *Top-up recommended soon to prevent AI inference pause.*\n"
+                "👉 [Top up at venice.ai/settings/api](https://venice.ai/settings/api)"
             )
         else:
-            txt = f"❌ *Error retrieving balance*: `{res.get('error')}`"
-        self.send_message(chat_id, txt, reply_markup=self.back_to_main_keyboard())
+            status_desc = "🟢 *STATUS: HEALTHY & FULLY OPERATIONAL*"
+
+        txt = (
+            f"💰 *Venice.ai Account Balances*:\n\n"
+            f"• *Inference Health*: {badge}\n"
+            f"• *USD Balance*: `${usd:.4f}`\n"
+            f"• *DIEM Token*: `{diem:.2f}`\n"
+            f"• *Tier*: `{tier}`\n\n"
+            f"{status_desc}\n\n"
+            f"⚡ *Local Resilience*: Key management, agent sub-keys, and Cloud DNS allocation claim links remain 100% operational locally!"
+        )
+        kb = {
+            "inline_keyboard": [
+                [{"text": "💳 Add Credits (venice.ai)", "url": "https://venice.ai/settings/api"}],
+                [{"text": "« Back to Main Dashboard", "callback_data": "menu_main"}]
+            ]
+        }
+        self.send_message(chat_id, txt, reply_markup=kb)
 
     def _handle_subkeys_command(self, chat_id: str):
         subkeys = self.vault.get_subkeys()
@@ -1258,9 +1393,20 @@ class VeniceTelegramBot:
         supervisor = ServiceSupervisor()
         st = supervisor.get_status()
         methods_str = ", ".join(st.get("autostart_methods", [])) or "None"
+
+        client = self._get_venice_client()
+        thresholds = self.vault.get_balance_thresholds()
+        bal_status = client.check_balance_status(
+            low_threshold_usd=thresholds.get("low_usd", 1.0),
+            out_threshold_usd=thresholds.get("out_usd", 0.05)
+        )
+        badge = bal_status.get("badge", "🟢 HEALTHY")
+        usd = bal_status.get("usd", 0.0)
+
         txt = (
             "🛡️ *Venice Key Manager // Resilience & Service Status*:\n\n"
             f"• *Bot Daemon*: `ONLINE & POLLING ✅`\n"
+            f"• *Inference Credits*: {badge} (`${usd:.4f}` USD)\n"
             f"• *Port 8844*: `{'LISTENING ✅' if st.get('port_listening') else 'CLOSED ⚪'}`\n"
             f"• *Supervisor*: `{'RUNNING ✅' if st.get('supervisor_running') else 'STANDBY / DIRECT ⚪'}` (PID: `{st.get('supervisor_pid') or 'None'}`)\n"
             f"• *Child Process*: `{'RUNNING ✅' if st.get('child_running') else 'DIRECT ⚪'}` (PID: `{st.get('child_pid') or 'None'}`)\n"
@@ -1350,20 +1496,17 @@ class VeniceTelegramBot:
 
         # Intent 8: General Conversational Query -> Venice AI Inference with fallback
         client = self._get_venice_client()
-        ai_prompt = (
-            f"You are v3n15PE_bot, the autonomous agent assistant and fleet controller for the Venice Key Manager. "
-            f"You assist the user with Venice.ai API keys, model quality tiers (XS to XL), Cloud DNS key allocation links "
-            f"(venice.vmu.cash/claim/...), USD/DIEM balance tracking, fleet nodes (Local Host, mcmini), and service management.\n\n"
-            f"User asked: {text}\n\n"
-            f"Answer concisely in friendly Markdown. If they asked about creating keys, remind them they can type 'make a key for hermes-music' or /make_key."
+        thresholds = self.vault.get_balance_thresholds()
+        bal_status = client.check_balance_status(
+            low_threshold_usd=thresholds.get("low_usd", 1.0),
+            out_threshold_usd=thresholds.get("out_usd", 0.05)
         )
-        res = client.test_inference(prompt=ai_prompt, model="deepseek-v4-flash")
-        if res.get("success") and res.get("reply"):
-            self.send_message(chat_id, res.get("reply"), reply_markup=self.main_menu_keyboard())
-        else:
+        if bal_status.get("is_out"):
+            self.check_and_notify_balance()
             txt = (
                 "👋 *Venice Key Manager & Agent Controller*\n\n"
-                "ℹ️ *Note*: Conversational chat is in standby (Venice AI inference balance: $0.056 USD).\n\n"
+                f"🔴 *Inference Standby*: Venice AI inference credits are depleted (${bal_status.get('usd', 0):.4f} USD).\n"
+                "👉 Visit [venice.ai/settings/api](https://venice.ai/settings/api) to add credits.\n\n"
                 "⚡ **Key Management & Swarm Provisioning Are 100% Operational Locally!**\n\n"
                 "You can make keys and mint allocations via **plain text** right now:\n"
                 "• `make a key for hermes-music tier s`\n"
@@ -1371,9 +1514,48 @@ class VeniceTelegramBot:
                 "• `mint key for hermes-music 3 keys`\n"
                 "• `/make_key [agent] [tier] [budget]`\n"
                 "• `/mint_key [agent] [tier] [count]`\n"
-                "• `/provision` (3-step wizard)\n"
-                "• `/subkeys` (list active keys)\n"
                 "• `/balance` (live account balance)\n\n"
+                "Or tap any button below:"
+            )
+            self.send_message(chat_id, txt, reply_markup=self.main_menu_keyboard())
+            return
+
+        ai_prompt = (
+            f"You are v3n15PE_bot, the autonomous agent assistant and fleet controller for the Venice Key Manager. "
+            f"You assist the user with Venice.ai API keys, model quality tiers (XS to XL), Cloud DNS key allocation links "
+            f"(venice.vmu.cash/claim/...), USD/DIEM balance tracking, fleet nodes (Local Host, mcmini), and service management.\n\n"
+            f"User asked: {text}\n\n"
+            f"Answer concisely in friendly Markdown. If they asked about creating keys, remind them they can type 'make a key for hermes-music' or /make_key."
+        )
+        res = client.test_inference(prompt=ai_prompt, model="deepseek-v4-flash", max_tokens=300)
+        reply = res.get("content") or res.get("reply") or res.get("reasoning")
+        if res.get("success") and reply:
+            if bal_status.get("is_low"):
+                reply += f"\n\n⚠️ _[Venice balance is low: ${bal_status.get('usd', 0):.4f} remaining. Top-up: venice.ai/settings/api]_"
+            self.send_message(chat_id, reply, reply_markup=self.main_menu_keyboard())
+        elif res.get("out_of_credits") or res.get("status_code") == 402:
+            self.check_and_notify_balance(force=True)
+            txt = (
+                "👋 *Venice Key Manager & Agent Controller*\n\n"
+                "🔴 *Inference Standby*: Venice AI inference credits are currently depleted ($0.00 USD).\n"
+                "👉 Visit [venice.ai/settings/api](https://venice.ai/settings/api) to add credits.\n\n"
+                "⚡ **Key Management & Swarm Provisioning Are 100% Operational Locally!**\n\n"
+                "You can make keys and mint allocations via **plain text** right now:\n"
+                "• `make a key for hermes-music tier s`\n"
+                "• `mint key for hermes-music 3 keys`\n"
+                "• `/balance`\n\n"
+                "Or tap any button below:"
+            )
+            self.send_message(chat_id, txt, reply_markup=self.main_menu_keyboard())
+        else:
+            txt = (
+                "👋 *Venice Key Manager & Agent Controller*\n\n"
+                f"ℹ️ *Note*: Conversational inference error (`{res.get('error')}`).\n\n"
+                "⚡ **Key Management & Swarm Provisioning Are 100% Operational Locally!**\n\n"
+                "You can make keys and mint allocations via **plain text** right now:\n"
+                "• `make a key for hermes-music tier s`\n"
+                "• `mint key for hermes-music 3 keys`\n"
+                "• `/balance`\n\n"
                 "Or tap any button below:"
             )
             self.send_message(chat_id, txt, reply_markup=self.main_menu_keyboard())
@@ -1463,18 +1645,69 @@ class VeniceTelegramBot:
             else:
                 self.send_message(chat_id, "Usage: `/register_bot <agent_name> <bot_token>`")
 
+        elif text.startswith("/threshold") or text.startswith("/balance_threshold"):
+            parts = text.split()
+            thresholds = self.vault.get_balance_thresholds()
+            if len(parts) >= 2:
+                try:
+                    new_low = float(parts[1].replace("$", ""))
+                    new_out = float(parts[2].replace("$", "")) if len(parts) >= 3 else thresholds.get("out_usd", 0.05)
+                    thresholds = self.vault.set_balance_thresholds(low_usd=new_low, out_usd=new_out)
+                    self.send_message(
+                        chat_id,
+                        f"⚙️ *Balance Alert Thresholds Updated!*\n\n"
+                        f"• *Low Balance Threshold*: `< ${thresholds['low_usd']:.2f} USD`\n"
+                        f"• *Depleted Threshold*: `<= ${thresholds['out_usd']:.2f} USD`\n\n"
+                        f"You will automatically receive proactive Telegram notifications when credits cross these thresholds."
+                    )
+                except Exception as e:
+                    self.send_message(chat_id, f"❌ Error setting thresholds: `{e}`. Usage: `/threshold <low_usd> [out_usd]`")
+            else:
+                self.send_message(
+                    chat_id,
+                    f"⚙️ *Current Balance Alert Thresholds*:\n\n"
+                    f"• *Low Balance Threshold*: `< ${thresholds['low_usd']:.2f} USD`\n"
+                    f"• *Depleted Threshold*: `<= ${thresholds['out_usd']:.2f} USD`\n\n"
+                    f"To update, type: `/threshold <low_usd> [out_usd]` (e.g. `/threshold 1.50 0.10`)"
+                )
+
         elif text.startswith("/ask"):
             prompt = text[4:].strip()
             if not prompt:
                 self.send_message(chat_id, "Usage: `/ask <prompt>`")
                 return
             client = self._get_venice_client()
-            res = client.test_inference(prompt=prompt, model="deepseek-v4-flash", max_tokens=150)
+            thresholds = self.vault.get_balance_thresholds()
+            bal_status = client.check_balance_status(
+                low_threshold_usd=thresholds.get("low_usd", 1.0),
+                out_threshold_usd=thresholds.get("out_usd", 0.05)
+            )
+            if bal_status.get("is_out"):
+                self.check_and_notify_balance()
+                self.send_message(
+                    chat_id,
+                    "🔴 *Venice Inference Credits Depleted!*\n\n"
+                    f"Cannot execute `/ask` because your account balance is depleted (${bal_status.get('usd', 0):.4f} USD).\n"
+                    "👉 Visit [venice.ai/settings/api](https://venice.ai/settings/api) to add credits.\n\n"
+                    "⚡ *Local key management and allocations remain 100% operational.*"
+                )
+                return
+
+            res = client.test_inference(prompt=prompt, model="deepseek-v4-flash", max_tokens=300)
             if res.get("success"):
                 cost = res.get("cost", {}).get("usd", 0)
+                content = res.get("content") or res.get("reply") or res.get("reasoning")
+                warning_badge = f"\n\n⚠️ _[Low Balance: ${bal_status.get('usd', 0):.4f} remaining. Top up: venice.ai/settings/api]_" if bal_status.get("is_low") else ""
                 txt = (
                     f"⚡ *Response* ({res.get('latency_ms')} ms | {res.get('usage', {}).get('total_tokens', 0)} tok | ${cost:.5f}):\n\n"
-                    f"{res.get('content')}"
+                    f"{content}{warning_badge}"
+                )
+            elif res.get("out_of_credits") or res.get("status_code") == 402:
+                self.check_and_notify_balance(force=True)
+                txt = (
+                    "🔴 *Venice Inference Credits Depleted!* (HTTP 402)\n\n"
+                    "Please top up at [venice.ai/settings/api](https://venice.ai/settings/api).\n"
+                    "Local key management and allocations remain operational."
                 )
             else:
                 txt = f"❌ *Inference Error*: `{res.get('error')}`"
@@ -1488,15 +1721,40 @@ class VeniceTelegramBot:
                 if tier not in MODEL_TIER_ORDER:
                     self.send_message(chat_id, f"Invalid tier `{tier}`. Choose from: `{', '.join(MODEL_TIER_ORDER)}`")
                     return
-                model = get_model_for_tier(tier)
                 client = self._get_venice_client()
-                res = client.test_inference(prompt=prompt, model=model, max_tokens=150)
+                thresholds = self.vault.get_balance_thresholds()
+                bal_status = client.check_balance_status(
+                    low_threshold_usd=thresholds.get("low_usd", 1.0),
+                    out_threshold_usd=thresholds.get("out_usd", 0.05)
+                )
+                if bal_status.get("is_out"):
+                    self.check_and_notify_balance()
+                    self.send_message(
+                        chat_id,
+                        "🔴 *Venice Inference Credits Depleted!*\n\n"
+                        f"Cannot execute `/ask_tier` because your account balance is depleted (${bal_status.get('usd', 0):.4f} USD).\n"
+                        "👉 Visit [venice.ai/settings/api](https://venice.ai/settings/api) to add credits.\n\n"
+                        "⚡ *Local key management and allocations remain 100% operational.*"
+                    )
+                    return
+
+                model = get_model_for_tier(tier)
+                res = client.test_inference(prompt=prompt, model=model, max_tokens=300)
                 if res.get("success"):
                     cost = res.get("cost", {}).get("usd", 0)
+                    content = res.get("content") or res.get("reply") or res.get("reasoning")
+                    warning_badge = f"\n\n⚠️ _[Low Balance: ${bal_status.get('usd', 0):.4f} remaining. Top up: venice.ai/settings/api]_" if bal_status.get("is_low") else ""
                     txt = (
                         f"⚡ *Response* [Tier: `{tier.upper()}` | Model: `{model}`] "
                         f"({res.get('latency_ms')} ms | {res.get('usage', {}).get('total_tokens', 0)} tok | ${cost:.5f}):\n\n"
-                        f"{res.get('content')}"
+                        f"{content}{warning_badge}"
+                    )
+                elif res.get("out_of_credits") or res.get("status_code") == 402:
+                    self.check_and_notify_balance(force=True)
+                    txt = (
+                        "🔴 *Venice Inference Credits Depleted!* (HTTP 402)\n\n"
+                        "Please top up at [venice.ai/settings/api](https://venice.ai/settings/api).\n"
+                        "Local key management and allocations remain operational."
                     )
                 else:
                     txt = f"❌ *Inference Error*: `{res.get('error')}`"
@@ -1663,7 +1921,8 @@ class VeniceTelegramBot:
                 "• `/vault_status` - Check disaster recovery and backup status\n"
                 "• `/fleet` - Check status of all paired fleet nodes (Local, mcmini)\n"
                 "• `/sync_fleet [node|all]` - Pull latest Git updates across machines\n"
-                "• `/balance` - Check live USD and DIEM balance\n"
+                "• `/balance` - Check live USD and DIEM balance & health status\n"
+                "• `/threshold [low] [out]` - View or set balance alert thresholds\n"
                 "• `/ask <prompt>` - Run light inference on Venice\n"
                 "• `/ask_tier <xs|s|m|l|xl> <prompt>` - Inference on specific model tier\n"
                 "• `/set_admin_key <key>` - Configure Venice Admin Key\n"
@@ -1699,8 +1958,16 @@ class VeniceTelegramBot:
     def run(self):
         self.running = True
         logger.info(f"Venice Telegram Bot started. Listening for updates...")
+        try:
+            self.check_and_notify_balance()
+        except Exception as e:
+            logger.error(f"Initial balance check error: {e}")
+
         while self.running:
             try:
+                if time.time() - self.last_balance_check_time > self.balance_check_interval:
+                    self.check_and_notify_balance()
+
                 self.poll_once()
             except KeyboardInterrupt:
                 logger.info("Stopping Telegram Bot...")

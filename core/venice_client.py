@@ -63,6 +63,102 @@ class VeniceClient:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    def check_balance_status(
+        self,
+        key: Optional[str] = None,
+        low_threshold_usd: float = 1.0,
+        out_threshold_usd: float = 0.05
+    ) -> Dict[str, Any]:
+        """
+        Evaluates current Venice.ai inference balance health.
+        Returns:
+            status: "HEALTHY" | "LOW" | "OUT"
+            is_low: bool
+            is_out: bool
+            usd: float
+            diem: float
+            badge: str
+            warning: Optional[str]
+            recharge_url: str
+        """
+        limits_res = self.get_rate_limits(key=key)
+        if not limits_res.get("success"):
+            status_code = limits_res.get("status_code", 0)
+            err = limits_res.get("error", "Failed to retrieve rate limits")
+            if status_code == 402 or "insufficient" in str(err).lower():
+                return {
+                    "success": True,
+                    "status": "OUT",
+                    "is_low": False,
+                    "is_out": True,
+                    "usd": 0.0,
+                    "diem": 0.0,
+                    "bundled_credits": 0.0,
+                    "api_tier": "unknown",
+                    "badge": "🔴 OUT OF CREDITS",
+                    "warning": "Venice AI credits depleted. Inference will fail with 402 Insufficient Balance.",
+                    "message": "Venice AI credits depleted. Visit https://venice.ai/settings/api to recharge.",
+                    "recharge_url": "https://venice.ai/settings/api"
+                }
+            return {
+                "success": False,
+                "status": "UNKNOWN",
+                "is_low": False,
+                "is_out": False,
+                "usd": 0.0,
+                "diem": 0.0,
+                "bundled_credits": 0.0,
+                "api_tier": "unknown",
+                "badge": "⚪ UNKNOWN",
+                "warning": None,
+                "error": err,
+                "recharge_url": "https://venice.ai/settings/api"
+            }
+
+        balances = limits_res.get("balances", {})
+        api_tier = limits_res.get("apiTier", {}).get("id", "paid")
+        usd = float(balances.get("USD", 0.0) or 0.0)
+        diem = float(balances.get("DIEM", 0.0) or 0.0)
+        bundled = float(balances.get("BUNDLED_CREDITS", 0.0) or 0.0)
+
+        # Evaluate thresholds
+        if usd <= out_threshold_usd and diem <= 0.0 and bundled <= 0.0:
+            status = "OUT"
+            is_low = False
+            is_out = True
+            badge = "🔴 OUT OF CREDITS"
+            warning = f"Venice AI credits depleted (${usd:.4f} USD). Inference will fail with 402 Insufficient Balance."
+            msg = f"Inference credits depleted (${usd:.4f} USD). Visit https://venice.ai/settings/api to add credits."
+        elif usd < low_threshold_usd and diem <= 0.0 and bundled <= 0.0:
+            status = "LOW"
+            is_low = True
+            is_out = False
+            badge = "🟡 LOW CREDITS"
+            warning = f"Venice AI credits running low (${usd:.4f} USD remaining, threshold < ${low_threshold_usd:.2f})."
+            msg = f"Inference credits running low (${usd:.4f} USD remaining). Top-up recommended."
+        else:
+            status = "HEALTHY"
+            is_low = False
+            is_out = False
+            badge = "🟢 HEALTHY"
+            warning = None
+            msg = f"Inference balance operational (${usd:.4f} USD, {diem:.2f} DIEM)."
+
+        return {
+            "success": True,
+            "status": status,
+            "is_low": is_low,
+            "is_out": is_out,
+            "usd": usd,
+            "diem": diem,
+            "bundled_credits": bundled,
+            "api_tier": api_tier,
+            "badge": badge,
+            "warning": warning,
+            "message": msg,
+            "recharge_url": "https://venice.ai/settings/api"
+        }
+
     # --- API Key Management (ADMIN Key Required) ---
 
     def list_keys(self, admin_key: Optional[str] = None) -> Dict[str, Any]:
@@ -210,6 +306,7 @@ class VeniceClient:
                 reasoning = message.get("reasoning_content") or ""
                 usage = data.get("usage", {})
                 cost = data.get("cost", {})
+                reply_text = content or reasoning
 
                 return {
                     "success": True,
@@ -217,9 +314,19 @@ class VeniceClient:
                     "latency_ms": latency_ms,
                     "content": content,
                     "reasoning": reasoning,
+                    "reply": reply_text,
                     "usage": usage,
                     "cost": cost,
                     "finish_reason": choice.get("finish_reason")
+                }
+            elif resp.status_code == 402 or "insufficient" in (resp.text or "").lower():
+                return {
+                    "success": False,
+                    "latency_ms": latency_ms,
+                    "status_code": 402,
+                    "out_of_credits": True,
+                    "error": "Insufficient USD or Diem balance to complete inference request. Visit https://venice.ai/settings/api to add credits.",
+                    "recharge_url": "https://venice.ai/settings/api"
                 }
             return {
                 "success": False,
@@ -256,6 +363,7 @@ class VeniceClient:
 
         balances = limits_res.get("balances", {})
         tier = limits_res.get("apiTier", {}).get("id", "paid")
+        status_res = self.check_balance_status(key=cleaned_key)
 
         # 2. Run small ping inference test (15 tokens)
         infer_res = self.test_inference(
@@ -272,7 +380,12 @@ class VeniceClient:
             "masked_key": masked,
             "balances": balances,
             "tier": tier,
+            "balance_status": status_res.get("status", "HEALTHY"),
+            "badge": status_res.get("badge", "🟢 HEALTHY"),
+            "warning": status_res.get("warning"),
             "latency_ms": latency,
-            "inference_test": infer_res.get("content", "OK")
+            "inference_test": infer_res.get("content") or infer_res.get("reply", "OK"),
+            "out_of_credits": infer_res.get("out_of_credits", False),
+            "recharge_url": "https://venice.ai/settings/api"
         }
 

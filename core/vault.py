@@ -1135,6 +1135,42 @@ class KeyVault:
             return True
         return False
 
+    # --- Balance Alerts & Thresholds ---
+
+    def get_balance_thresholds(self) -> Dict[str, float]:
+        """Returns configured USD thresholds for low/out alerts."""
+        thresholds = self.data.get("inference_thresholds", {})
+        return {
+            "low_usd": float(thresholds.get("low_usd", 1.0)),
+            "out_usd": float(thresholds.get("out_usd", 0.05))
+        }
+
+    def set_balance_thresholds(self, low_usd: float = 1.0, out_usd: float = 0.05) -> Dict[str, float]:
+        """Updates and persists USD thresholds for balance alerts."""
+        self.data["inference_thresholds"] = {
+            "low_usd": float(low_usd),
+            "out_usd": float(out_usd)
+        }
+        self._save(force=True)
+        return self.get_balance_thresholds()
+
+    def get_last_balance_alert_state(self) -> Dict[str, Any]:
+        """Returns the last alerted balance status and timestamp."""
+        return self.data.get("last_balance_alert", {
+            "status": "HEALTHY",
+            "timestamp": 0.0,
+            "usd": 0.0
+        })
+
+    def set_last_balance_alert_state(self, status: str, usd: float) -> None:
+        """Records the latest alerted status to avoid alert spam across restarts."""
+        self.data["last_balance_alert"] = {
+            "status": status,
+            "timestamp": time.time(),
+            "usd": float(usd)
+        }
+        self._save()
+
 
 def _parse_iso(iso_str: Optional[str]) -> Optional[datetime]:
     if not iso_str:
