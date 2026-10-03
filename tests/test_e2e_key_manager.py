@@ -15,9 +15,17 @@ import re
 import json
 import time
 import shutil
+import unittest
 import urllib.request
 import urllib.error
 from pathlib import Path
+
+if __name__ != "__main__" and os.environ.get("VENICE_E2E_LIVE") != "1":
+    raise unittest.SkipTest(
+        "Live E2E suite targets a running service (TEST_BASE_URL, default :8844) and mutates it. "
+        "Set VENICE_E2E_LIVE=1 to run it."
+    )
+
 from core.vault import KeyVault
 
 BASE_URL = os.environ.get("TEST_BASE_URL", "http://localhost:8844")

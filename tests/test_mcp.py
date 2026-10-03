@@ -21,6 +21,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from mcp.server import VeniceMCPServer
 
+import os
+import unittest
+
 
 def test_mcp_protocol():
     print("[1/3] Testing MCP Server initialize & tools/list...")
@@ -52,6 +55,8 @@ def test_mcp_protocol():
 
 
 def test_mcp_tool_execution():
+    if os.environ.get("VENICE_LIVE_TESTS") != "1":
+        raise unittest.SkipTest("live Venice balance call (set VENICE_LIVE_TESTS=1 to enable)")
     print("[2/3] Testing MCP tool execution (venice_get_balances_and_tier)...")
     server = VeniceMCPServer()
     call_req = {
@@ -92,6 +97,7 @@ def test_mcp_tg_tool():
 
 
 if __name__ == "__main__":
+    os.environ.setdefault("VENICE_LIVE_TESTS", "1")
     test_mcp_protocol()
     test_mcp_tool_execution()
     test_mcp_tg_tool()

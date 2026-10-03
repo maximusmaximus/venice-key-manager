@@ -66,9 +66,14 @@ class ServiceSupervisor:
     def __init__(self, root_dir: Optional[Path] = None, port: int = 8844):
         self.root_dir = root_dir or PROJECT_ROOT
         self.port = port
-        self.state_file = self.root_dir / ".supervisor_state.json"
-        self.sentinel_restart = self.root_dir / ".restart_requested"
-        self.log_file = self.root_dir / ".supervisor.log"
+        # State/sentinel files may be redirected (used by the test-suite so that
+        # exercising "restart" never touches the live supervisor).
+        env_state = os.environ.get("VENICE_SUPERVISOR_STATE_DIR")
+        state_dir = Path(env_state) if (env_state and root_dir is None) else self.root_dir
+        self.state_dir = state_dir
+        self.state_file = state_dir / ".supervisor_state.json"
+        self.sentinel_restart = state_dir / ".restart_requested"
+        self.log_file = state_dir / ".supervisor.log"
         self._stop_requested = False
 
     def log(self, message: str):

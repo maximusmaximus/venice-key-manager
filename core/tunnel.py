@@ -19,7 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 logger = logging.getLogger("venice_tunnel")
 
 CLOUDFLARED_CANDIDATE_PATHS = [
-    Path(r"C:\Users\maxin\.gemini\antigravity\skills\secure-share\scripts\cloudflared.exe"),
+    Path.home() / ".gemini" / "antigravity" / "skills" / "secure-share" / "scripts" / "cloudflared.exe",
     Path(__file__).resolve().parent / "cloudflared.exe",
     Path(__file__).resolve().parent / "cloudflared"
 ]

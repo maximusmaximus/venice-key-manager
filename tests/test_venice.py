@@ -22,6 +22,15 @@ from core.vault import KeyVault
 from core.venice_client import VeniceClient
 from core.deployer import ConfigDeployer
 
+import os
+import unittest
+
+
+def _require_live():
+    """Skip tests that hit the real Venice API unless explicitly enabled."""
+    if os.environ.get("VENICE_LIVE_TESTS") != "1":
+        raise unittest.SkipTest("live Venice test (set VENICE_LIVE_TESTS=1 to enable)")
+
 
 def test_vault():
     print("[1/4] Testing KeyVault initialization...")
@@ -31,6 +40,7 @@ def test_vault():
 
 
 def test_venice_rate_limits():
+    _require_live()
     print("[2/4] Testing Venice.ai live balance & rate limits query...")
     vault = KeyVault()
     client = VeniceClient(
@@ -45,6 +55,7 @@ def test_venice_rate_limits():
 
 
 def test_venice_inference():
+    _require_live()
     print("[3/4] Testing Venice.ai light inference (deepseek-v4-flash)...")
     vault = KeyVault()
     client = VeniceClient(
@@ -78,6 +89,7 @@ def test_config_deployer():
 
 
 if __name__ == "__main__":
+    os.environ.setdefault("VENICE_LIVE_TESTS", "1")
     test_vault()
     test_venice_rate_limits()
     test_venice_inference()

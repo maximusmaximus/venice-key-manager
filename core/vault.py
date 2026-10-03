@@ -9,6 +9,7 @@ import logging
 import os
 import secrets
 import shutil
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -69,18 +70,34 @@ def _atomic_write_json(path: Path, data: Dict[str, Any]) -> bool:
     Atomically writes dictionary to JSON file with forced disk flush (fsync)
     to prevent file corruption during sudden restarts or power loss.
     """
+    tmp_path = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_name = f".tmp_{os.getpid()}_{int(time.time() * 1000)}.tmp"
+        # Random suffix: pid+timestamp alone collides when two threads save in the same millisecond.
+        tmp_name = f".tmp_{os.getpid()}_{secrets.token_hex(6)}.tmp"
         tmp_path = path.parent / tmp_name
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(str(tmp_path), str(path))
-        return True
+        # On Windows os.replace fails transiently if another process (AV scanner, a reader)
+        # holds the destination open. Retry briefly before giving up.
+        last_err = None
+        for attempt in range(6):
+            try:
+                os.replace(str(tmp_path), str(path))
+                return True
+            except PermissionError as pe:
+                last_err = pe
+                time.sleep(0.05 * (attempt + 1))
+        raise last_err  # type: ignore[misc]
     except Exception as e:
         logger.error(f"Failed to atomically write {path}: {e}")
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
         return False
 
 
@@ -153,11 +170,57 @@ def _extract_from_yaml_file(path: Path) -> Dict[str, str]:
 
 class KeyVault:
     def __init__(self, vault_path: Optional[Path] = None):
-        self.vault_path = vault_path or VAULT_FILE
+        env_path = os.environ.get("VENICE_VAULT_PATH", "").strip()
+        self.vault_path = Path(vault_path) if vault_path else (Path(env_path) if env_path else VAULT_FILE)
         self.backup_path = self.vault_path.with_suffix(".backup.json")
-        if self.vault_path == VAULT_FILE:
+        # Only the canonical production vault mirrors into user-profile stores and the shared
+        # snapshot directory. Sandboxed vaults (tests, VENICE_VAULT_PATH) stay self-contained.
+        self.is_primary = self.vault_path.resolve() == VAULT_FILE.resolve()
+        self.snapshot_dir = BACKUP_DIR if self.is_primary else self.vault_path.parent / ".vault_backups"
+        self._lock = threading.RLock()
+        self._data: Dict[str, Any] = {}
+        self._loaded_mtime: Optional[int] = None
+        if self.is_primary:
             BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-        self.data: Dict[str, Any] = self._load()
+        self.data = self._load()
+        self._loaded_mtime = self._disk_mtime()
+
+    # --- Cross-instance freshness ---
+
+    def _disk_mtime(self) -> Optional[int]:
+        try:
+            return self.vault_path.stat().st_mtime_ns
+        except OSError:
+            return None
+
+    @property
+    def data(self) -> Dict[str, Any]:
+        """
+        Live vault document. Several KeyVault instances may coexist (Telegram bot, web server,
+        MCP server, CLI). Before every access we cheaply stat the file and reload if another
+        instance or process wrote it, so nobody saves over newer state with a stale copy.
+        """
+        mtime = self._disk_mtime()
+        if mtime is not None and self._loaded_mtime is not None and mtime != self._loaded_mtime:
+            with self._lock:
+                disk = _read_json_file(self.vault_path)
+                if isinstance(disk, dict) and (_has_valuable_keys(disk) or not _has_valuable_keys(self._data)):
+                    self._data = disk
+                self._loaded_mtime = mtime
+        return self._data
+
+    @data.setter
+    def data(self, value: Dict[str, Any]) -> None:
+        self._data = value
+
+    def reload(self) -> Dict[str, Any]:
+        """Force a reload from disk (no-op if the file is unreadable)."""
+        with self._lock:
+            disk = _read_json_file(self.vault_path)
+            if isinstance(disk, dict):
+                self._data = disk
+            self._loaded_mtime = self._disk_mtime()
+        return self._data
 
     def _default_data(self) -> Dict[str, Any]:
         """Constructs default vault template and attempts initial auto-discovery."""
@@ -248,7 +311,7 @@ class KeyVault:
             candidates.append((self.backup_path.stat().st_mtime, d_self, self.backup_path))
 
         # If custom vault path (e.g. unit test), do not mix with production fleet backups
-        if self.vault_path != VAULT_FILE:
+        if not self.is_primary:
             return candidates[0][1] if candidates else None
 
         # 2. Primary backup file
@@ -420,8 +483,9 @@ class KeyVault:
             if data is None and self.vault_path.stat().st_size > 0:
                 # Primary file exists but is corrupted (e.g. from sudden crash)
                 ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                corrupt_backup = BACKUP_DIR / f"corrupt_vault_{ts}.json"
+                corrupt_backup = self.snapshot_dir / f"corrupt_vault_{ts}.json"
                 try:
+                    self.snapshot_dir.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(self.vault_path, corrupt_backup)
                     logger.error(f"Primary vault file corrupted. Preserved corrupt copy to {corrupt_backup}")
                 except Exception:
@@ -443,17 +507,17 @@ class KeyVault:
 
         # If recovered, missing on disk, or changed, save back to disk and mirrors immediately
         if recalled or not self.vault_path.exists():
-            self.data = data
+            self._data = data
             self._save(force=True, create_snapshot=True)
 
         return data
 
     def _rotate_snapshots(self, max_snapshots: int = 20) -> None:
-        """Keeps the newest max_snapshots files in .vault_backups/ and removes older ones."""
+        """Keeps the newest max_snapshots files in the snapshot dir and removes older ones."""
         try:
-            if not BACKUP_DIR.exists():
+            if not self.snapshot_dir.exists():
                 return
-            snaps = sorted(BACKUP_DIR.glob("vault_*.json"), key=lambda p: p.stat().st_mtime)
+            snaps = sorted(self.snapshot_dir.glob("vault_*.json"), key=lambda p: p.stat().st_mtime)
             while len(snaps) > max_snapshots:
                 oldest = snaps.pop(0)
                 try:
@@ -468,52 +532,62 @@ class KeyVault:
         Atomically saves vault data to primary file and synchronously mirrors
         to secondary backup and user-profile disaster recovery mirrors.
         """
-        if data is not None:
-            self.data = data
+        with self._lock:
+            if data is not None:
+                self._data = data
+            # Deliberately use self._data (not the reloading property) so pending in-memory
+            # mutations are never discarded by a reload right before they are written.
+            current = self._data
 
-        # Safety Guard: Never overwrite non-empty keys with empty keys unless force=True
-        if not force and not _has_valuable_keys(self.data):
-            disk_data = _read_json_file(self.vault_path) or self._find_newest_valid_backup()
-            if disk_data and _has_valuable_keys(disk_data):
-                logger.warning("Safety guard triggered: Refusing to overwrite valuable keys with empty data. Merging...")
-                self._auto_recall_missing_fields(self.data)
+            # Safety Guard: Never overwrite non-empty keys with empty keys unless force=True
+            if not force and not _has_valuable_keys(current):
+                disk_data = _read_json_file(self.vault_path) or self._find_newest_valid_backup()
+                if disk_data and _has_valuable_keys(disk_data):
+                    logger.warning("Safety guard triggered: Refusing to overwrite valuable keys with empty data. Merging...")
+                    self._auto_recall_missing_fields(current)
 
-        # 1. Atomic write to primary vault file
-        _atomic_write_json(self.vault_path, self.data)
+            # 1. Atomic write to primary vault file
+            _atomic_write_json(self.vault_path, current)
+            self._loaded_mtime = self._disk_mtime()
 
-        # 2. Synchronous mirror to secondary backup file
-        _atomic_write_json(self.backup_path, self.data)
+            # 2. Synchronous mirror to secondary backup file
+            _atomic_write_json(self.backup_path, current)
 
-        # 3. Synchronous mirror to user profile disaster recovery mirrors (main vault only)
-        if self.vault_path == VAULT_FILE:
-            for up in (USER_PROFILE_BACKUP, HOME_VENICE_BACKUP):
-                _atomic_write_json(up, self.data)
+            # 3. Synchronous mirror to user profile disaster recovery mirrors (main vault only)
+            if self.is_primary:
+                for up in (USER_PROFILE_BACKUP, HOME_VENICE_BACKUP):
+                    _atomic_write_json(up, current)
 
-            # 4. Rolling versioned snapshot
-            if create_snapshot and _has_valuable_keys(self.data):
-                ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                snap_path = BACKUP_DIR / f"vault_{ts}.json"
-                _atomic_write_json(snap_path, self.data)
-                self._rotate_snapshots(max_snapshots=20)
+                # 4. Rolling versioned snapshot
+                if create_snapshot and _has_valuable_keys(current):
+                    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                    snap_path = self.snapshot_dir / f"vault_{ts}.json"
+                    _atomic_write_json(snap_path, current)
+                    self._rotate_snapshots(max_snapshots=20)
 
     # --- Backup & Recovery Public APIs ---
 
     def create_backup(self, label: str = "") -> Dict[str, Any]:
         """
         Explicitly creates a timestamped, labeled backup snapshot across all stores.
+        Sandboxed (non-primary) vaults only write inside their own directory.
         """
         ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        clean_label = f"_{label.strip()}" if label else ""
-        snap_path = BACKUP_DIR / f"vault_{ts}{clean_label}.json"
+        safe_label = "".join(c for c in (label or "").strip() if c.isalnum() or c in "-_")[:40]
+        clean_label = f"_{safe_label}" if safe_label else ""
+        snap_path = self.snapshot_dir / f"vault_{ts}{clean_label}.json"
 
-        ok = _atomic_write_json(snap_path, self.data)
-        _atomic_write_json(BACKUP_VAULT_FILE, self.data)
-        for up in (USER_PROFILE_BACKUP, HOME_VENICE_BACKUP):
-            _atomic_write_json(up, self.data)
+        current = self.data
+        ok = _atomic_write_json(snap_path, current)
+        _atomic_write_json(self.backup_path, current)
+        if self.is_primary:
+            for up in (USER_PROFILE_BACKUP, HOME_VENICE_BACKUP):
+                _atomic_write_json(up, current)
 
         return {
             "success": ok,
             "path": str(snap_path),
+            "filename": snap_path.name,
             "timestamp": ts,
             "size_bytes": snap_path.stat().st_size if snap_path.exists() else 0,
             "has_admin_key": bool(self.get_venice_admin_key()),
@@ -537,7 +611,7 @@ class KeyVault:
                 "filename": p.name,
                 "path": str(p),
                 "type": kind,
-                "modified_at": datetime.fromtimestamp(p.stat().st_mtime).isoformat() + "Z",
+                "modified_at": datetime.utcfromtimestamp(p.stat().st_mtime).isoformat() + "Z",
                 "size_bytes": p.stat().st_size,
                 "has_admin_key": bool(v.get("admin_key")),
                 "has_inference_key": bool(v.get("inference_key")),
@@ -545,16 +619,30 @@ class KeyVault:
                 "subkeys_count": len(d.get("subkeys", [])) if d else 0
             })
 
-        add_item(BACKUP_VAULT_FILE, "mirror_local")
-        add_item(USER_PROFILE_BACKUP, "mirror_user_profile")
-        add_item(HOME_VENICE_BACKUP, "mirror_home")
+        add_item(self.backup_path, "mirror_local")
+        if self.is_primary:
+            add_item(USER_PROFILE_BACKUP, "mirror_user_profile")
+            add_item(HOME_VENICE_BACKUP, "mirror_home")
 
-        if BACKUP_DIR.exists():
-            for sp in sorted(BACKUP_DIR.glob("vault_*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
+        if self.snapshot_dir.exists():
+            for sp in sorted(self.snapshot_dir.glob("vault_*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
                 add_item(sp, "snapshot")
 
         items.sort(key=lambda x: x["modified_at"], reverse=True)
         return items
+
+    def resolve_backup_path(self, path_or_name: str) -> Optional[Path]:
+        """
+        Maps a user-supplied backup path/filename to one of the vault's *known* backup files.
+        Prevents restoring from arbitrary filesystem paths supplied over the network.
+        """
+        if not path_or_name:
+            return None
+        wanted = str(path_or_name).strip()
+        for item in self.list_backups():
+            if wanted in (item["path"], item["filename"]):
+                return Path(item["path"])
+        return None
 
     def restore_from_file(self, backup_path: Path) -> Dict[str, Any]:
         """
@@ -645,8 +733,9 @@ class KeyVault:
             "vault_path": str(self.vault_path),
             "vault_exists": self.vault_path.exists(),
             "vault_size_bytes": self.vault_path.stat().st_size if self.vault_path.exists() else 0,
-            "backup_mirror_exists": BACKUP_VAULT_FILE.exists(),
-            "user_profile_mirror_exists": USER_PROFILE_BACKUP.exists() or HOME_VENICE_BACKUP.exists(),
+            "backup_mirror_exists": self.backup_path.exists(),
+            "user_profile_mirror_exists": (USER_PROFILE_BACKUP.exists() or HOME_VENICE_BACKUP.exists()) if self.is_primary else False,
+            "is_primary": self.is_primary,
             "total_snapshots": len([s for s in snaps if s["type"] == "snapshot"]),
             "last_backup_at": latest_mod,
             "has_admin_key": bool(self.get_venice_admin_key()),
@@ -791,13 +880,22 @@ class KeyVault:
         sec.setdefault("require_pairing", True)
         self._save(create_snapshot=True)
 
+    def generate_new_pairing_code(self) -> str:
+        """
+        Rotates the pairing code. All browsers/clients holding the old code lose access.
+        Note: if SECURE_PAIRING_CODE is set in the environment it still takes precedence.
+        """
+        code = f"VK-{secrets.token_hex(4).upper()}"
+        self.set_pairing_code(code)
+        return code
+
     def verify_pairing_code(self, candidate: str) -> bool:
         """Verifies candidate pairing code using constant-time comparison."""
         import hmac
         if not candidate:
             return False
         expected = self.get_pairing_code()
-        return hmac.compare_digest(candidate.strip(), expected)
+        return hmac.compare_digest(str(candidate).strip().encode("utf-8"), expected.encode("utf-8"))
 
     def is_pairing_required(self) -> bool:
         return self.data.get("security", {}).get("require_pairing", True)

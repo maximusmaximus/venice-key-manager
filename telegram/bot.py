@@ -1571,16 +1571,24 @@ class VeniceTelegramBot:
             self.send_message(chat_id, "⛔ Access Denied. This bot is restricted to its authorized administrator.")
             return
 
-        if text.startswith("/start") or text.startswith("/menu"):
+        if not text:
+            # Non-text updates (stickers, photos, joins) are ignored instead of triggering inference.
+            return
+
+        # Exact command token (handles '/cmd@BotName args' and avoids prefix collisions such as
+        # '/ask' swallowing '/ask_tier' or '/backup' swallowing '/backup_status').
+        cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
+
+        if cmd == "/start" or cmd == "/menu":
             self.send_message(chat_id, self.render_dashboard_text(), reply_markup=self.main_menu_keyboard())
 
-        elif text.startswith("/make_key") or text.startswith("/create_key") or text.startswith("/new_key") or text.startswith("/create_subkey"):
+        elif cmd == "/make_key" or cmd == "/create_key" or cmd == "/new_key" or cmd == "/create_subkey":
             self._handle_plain_text_make_key(chat_id, text)
 
-        elif text.startswith("/mint_key") or text.startswith("/mint_allocation") or text.startswith("/mint"):
+        elif cmd == "/mint_key" or cmd == "/mint_allocation" or cmd == "/mint":
             self._handle_plain_text_mint_allocation(chat_id, text)
 
-        elif text.startswith("/deploy_key") or text.startswith("/deploy"):
+        elif cmd == "/deploy_key" or cmd == "/deploy":
             parts = text.split()
             if len(parts) > 1:
                 key_id = parts[1].strip()
@@ -1602,10 +1610,10 @@ class VeniceTelegramBot:
             else:
                 self.send_message(chat_id, "Usage: `/deploy_key <key_id> [agent_name]`")
 
-        elif text.startswith("/pair_code"):
+        elif cmd == "/pair_code":
             self._handle_pair_code_command(chat_id)
 
-        elif text.startswith("/rotate_pair_code"):
+        elif cmd == "/rotate_pair_code":
             new_code = self.vault.generate_new_pairing_code()
             self.send_message(
                 chat_id,
@@ -1614,16 +1622,16 @@ class VeniceTelegramBot:
                 f"Previous sessions have been invalidated. Use this code to pair your browser."
             )
 
-        elif text.startswith("/subkeys"):
+        elif cmd == "/subkeys":
             self._handle_subkeys_command(chat_id)
 
-        elif text.startswith("/allocations"):
+        elif cmd == "/allocations":
             self._handle_allocations_command(chat_id)
 
-        elif text.startswith("/balance"):
+        elif cmd == "/balance":
             self._handle_balance_command(chat_id)
 
-        elif text.startswith("/set_admin_key"):
+        elif cmd == "/set_admin_key":
             parts = text.split(maxsplit=1)
             if len(parts) > 1:
                 key = parts[1].strip()
@@ -1632,7 +1640,7 @@ class VeniceTelegramBot:
             else:
                 self.send_message(chat_id, "Usage: `/set_admin_key <your_venice_admin_key>`")
 
-        elif text.startswith("/register_bot"):
+        elif cmd == "/register_bot":
             parts = text.split()
             if len(parts) >= 3:
                 agent = parts[1]
@@ -1645,7 +1653,7 @@ class VeniceTelegramBot:
             else:
                 self.send_message(chat_id, "Usage: `/register_bot <agent_name> <bot_token>`")
 
-        elif text.startswith("/threshold") or text.startswith("/balance_threshold"):
+        elif cmd == "/threshold" or cmd == "/balance_threshold":
             parts = text.split()
             thresholds = self.vault.get_balance_thresholds()
             if len(parts) >= 2:
@@ -1671,8 +1679,8 @@ class VeniceTelegramBot:
                     f"To update, type: `/threshold <low_usd> [out_usd]` (e.g. `/threshold 1.50 0.10`)"
                 )
 
-        elif text.startswith("/ask"):
-            prompt = text[4:].strip()
+        elif cmd == "/ask":
+            prompt = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) > 1 else ""
             if not prompt:
                 self.send_message(chat_id, "Usage: `/ask <prompt>`")
                 return
@@ -1713,7 +1721,7 @@ class VeniceTelegramBot:
                 txt = f"❌ *Inference Error*: `{res.get('error')}`"
             self.send_message(chat_id, txt)
 
-        elif text.startswith("/ask_tier"):
+        elif cmd == "/ask_tier":
             parts = text.split(maxsplit=2)
             if len(parts) >= 3:
                 tier = parts[1].lower().strip()
@@ -1762,7 +1770,7 @@ class VeniceTelegramBot:
             else:
                 self.send_message(chat_id, "Usage: `/ask_tier <xs|s|m|l|xl> <prompt>`")
 
-        elif text.startswith("/provision"):
+        elif cmd == "/provision":
             parts = text.split()
             if len(parts) > 1:
                 self._handle_plain_text_make_key(chat_id, text)
@@ -1792,7 +1800,7 @@ class VeniceTelegramBot:
                 }
                 self.send_message(chat_id, txt, reply_markup=kb)
 
-        elif text.startswith("/fleet"):
+        elif cmd == "/fleet":
             nodes = self.mesh.list_nodes(check_health=True)
             txt = f"🌐 *A2A Fleet Mesh & Machines ({len(nodes)})*:\n\n"
             for n in nodes:
@@ -1815,7 +1823,7 @@ class VeniceTelegramBot:
             }
             self.send_message(chat_id, txt, reply_markup=kb)
 
-        elif text.startswith("/sync_fleet"):
+        elif cmd == "/sync_fleet":
             parts = text.split()
             target = parts[1] if len(parts) > 1 else "all"
             self.send_message(chat_id, f"📥 Triggering Git pull for `{target}`...")
@@ -1838,7 +1846,7 @@ class VeniceTelegramBot:
                 txt = f"📥 *Git Sync {target}*: {st} {c_after}\n{r.get('message', '')}"
             self.send_message(chat_id, txt)
 
-        elif text.startswith("/backup") or text.startswith("/backup_vault"):
+        elif cmd == "/backup" or cmd == "/backup_vault":
             res = self.vault.create_backup(label="tg_cmd")
             txt = (
                 "💾 *Vault Backup Snapshot Created*:\n\n"
@@ -1851,7 +1859,7 @@ class VeniceTelegramBot:
             )
             self.send_message(chat_id, txt, reply_markup=self.back_to_main_keyboard())
 
-        elif text.startswith("/recall") or text.startswith("/recall_vault"):
+        elif cmd == "/recall" or cmd == "/recall_vault":
             self.send_message(chat_id, "🔄 *Running deep auto-recall across backup stores and configs...*")
             res = self.vault.auto_recall(sync_venice_remote=True)
             txt = (
@@ -1865,7 +1873,7 @@ class VeniceTelegramBot:
             )
             self.send_message(chat_id, txt, reply_markup=self.back_to_main_keyboard())
 
-        elif text.startswith("/vault_status") or text.startswith("/backup_status"):
+        elif cmd == "/vault_status" or cmd == "/backup_status":
             st = self.vault.get_backup_status()
             txt = (
                 "🛡️ *Vault Backup & Health Status*:\n\n"
@@ -1879,7 +1887,7 @@ class VeniceTelegramBot:
                 f"• *Active Venice Keys*: `{st.get('keys_count')}`\n"
                 f"• *Agent Sub-Keys*: `{st.get('subkeys_count')}`"
             )
-        elif text.startswith("/service_status") or text.startswith("/status"):
+        elif cmd == "/service_status" or cmd == "/status":
             supervisor = ServiceSupervisor()
             st = supervisor.get_status()
             methods_str = ", ".join(st.get("autostart_methods", [])) or "None"
@@ -1897,7 +1905,7 @@ class VeniceTelegramBot:
             )
             self.send_message(chat_id, txt, reply_markup=self.back_to_main_keyboard())
 
-        elif text.startswith("/restart_service"):
+        elif cmd == "/restart_service":
             supervisor = ServiceSupervisor()
             res = supervisor.request_restart()
             if res.get("success"):
@@ -1906,7 +1914,7 @@ class VeniceTelegramBot:
                 txt = f"❌ *Restart Signal Failed*: `{res.get('error')}`"
             self.send_message(chat_id, txt, reply_markup=self.back_to_main_keyboard())
 
-        elif text.startswith("/help"):
+        elif cmd == "/help":
             txt = (
                 "⚡ *Venice & TG Engine Commands*:\n\n"
                 "• `/menu` or `/start` - Open interactive control dashboard\n"

@@ -61,10 +61,10 @@ def run_all(port: int = 8844):
 
     # 1. Start Web Server in background daemon thread
     print(f"[1/2] Launching Web Dashboard on http://localhost:{port} ...")
-    start_web_server(port=port, daemon=True)
+    start_web_server(port=port, daemon=True, vault=vault, tunnel_manager=tunnel_mgr)
 
     # 2. Start Telegram Bot in main thread
-    print("[2/2] Launching Telegram Bot Daemon (@songprocessor_bot) ...")
+    print("[2/2] Launching Telegram Bot Daemon ...")
     bot = VeniceTelegramBot(vault=vault)
     try:
         bot.run()

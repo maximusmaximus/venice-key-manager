@@ -95,7 +95,12 @@ class TestServiceSupervisor(unittest.TestCase):
     def test_windows_install_uninstall_dry(self):
         """Test Windows installation paths."""
         with patch("platform.system", return_value="Windows"):
-            with patch.dict(os.environ, {"APPDATA": str(self.root_path)}):
+            with patch.dict(os.environ, {"APPDATA": str(self.root_path)}), \
+                 patch("subprocess.run") as mock_run:
+                # Never touch the real Task Scheduler from tests: the previous
+                # version of this test overwrote and then deleted the live
+                # 'VeniceKeyManagerSupervisor' autostart task.
+                mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
                 startup_dir = self.root_path / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
                 startup_dir.mkdir(parents=True, exist_ok=True)
 
@@ -110,6 +115,8 @@ class TestServiceSupervisor(unittest.TestCase):
                 un_res = self.supervisor.uninstall()
                 self.assertTrue(un_res.get("success"))
                 self.assertFalse(vbs.exists())
+                for call in mock_run.call_args_list:
+                    self.assertIn("schtasks", str(call))
 
     def test_macos_install_uninstall_dry(self):
         """Test macOS LaunchAgent plist creation and removal."""

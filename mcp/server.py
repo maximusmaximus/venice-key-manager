@@ -29,8 +29,8 @@ class VeniceMCPServer:
     SERVER_NAME = "venice-key-manager"
     SERVER_VERSION = "1.0.0"
 
-    def __init__(self):
-        self.vault = KeyVault()
+    def __init__(self, vault: Optional[KeyVault] = None):
+        self.vault = vault if vault is not None else KeyVault()
         self.tg_manager = TelegramAgentManager(self.vault)
         self.mesh = FleetMeshManager(self.vault)
 
@@ -304,6 +304,10 @@ class VeniceMCPServer:
                         "label": {
                             "type": "string",
                             "description": "Display label for the machine (e.g. 'McMini (macOS)')."
+                        },
+                        "pairing_code": {
+                            "type": "string",
+                            "description": "Optional pairing code of the REMOTE node, used to authenticate forwarded privileged calls (stored in the vault, never echoed back)."
                         }
                     },
                     "required": ["name", "base_url"]
@@ -655,7 +659,10 @@ class VeniceMCPServer:
             name_val = args.get("name")
             base_url = args.get("base_url")
             label_val = args.get("label", "")
-            return self.mesh.register_node(name_val, base_url, label=label_val)
+            if not name_val or not base_url:
+                return {"success": False, "error": "Both 'name' and 'base_url' are required."}
+            return self.mesh.register_node(name_val, base_url, label=label_val,
+                                           pairing_code=str(args.get("pairing_code", "") or ""))
 
         elif name == "venice_validate_guest_key":
             key_val = args.get("key", "").strip()

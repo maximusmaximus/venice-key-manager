@@ -22,8 +22,18 @@ from core.vault import KeyVault
 from core.tg_manager import TelegramAgentManager
 from core.deployer import ConfigDeployer
 
+import os
+import unittest
+
+
+def _require_live():
+    """Skip tests that hit the real Telegram API unless explicitly enabled."""
+    if os.environ.get("VENICE_LIVE_TESTS") != "1":
+        raise unittest.SkipTest("live Telegram test (set VENICE_LIVE_TESTS=1 to enable)")
+
 
 def test_tg_validation():
+    _require_live()
     print("[1/5] Testing Telegram bot token validation (getMe)...")
     vault = KeyVault()
     mgr = TelegramAgentManager(vault)
@@ -36,6 +46,7 @@ def test_tg_validation():
 
 
 def test_agent_registration():
+    _require_live()
     print("[2/5] Testing agent bot registration in vault...")
     vault = KeyVault()
     mgr = TelegramAgentManager(vault)
@@ -67,6 +78,7 @@ def test_botfather_wizard():
 
 
 def test_test_message_ping():
+    _require_live()
     print("[4/5] Testing Telegram test ping transmission...")
     vault = KeyVault()
     mgr = TelegramAgentManager(vault)
@@ -104,6 +116,7 @@ def test_tg_deployer():
 
 
 if __name__ == "__main__":
+    os.environ.setdefault("VENICE_LIVE_TESTS", "1")
     test_tg_validation()
     test_agent_registration()
     test_botfather_wizard()

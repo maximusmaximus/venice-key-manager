@@ -58,12 +58,34 @@ Venice Key Manager provides an automated, secure key distribution protocol for a
     - `venice_claim_allocated_key`: Agents claim their allocated key upon request via MCP, with optional automatic deployment to local `config.yaml`.
     - `venice_list_allocations`: Fleet overview of all active, pending, and claimed allocations.
 
-### 📊 Reactive Web Dashboard (Port 8660)
-* Dark-mode terminal/obsidian UI with real-time KPI metrics, spend progress bars, and countdown timers.
-* Dedicated **🌐 External Allocations** tab for project management, external key minting, and cURL / Python code snippets.
-* **Ubiquitous Copy Buttons**: 1-click clipboard copy for keys, tokens, IDs, .env files, and cURL snippets.
-* **Cryptographic Access Gate**: Web interface is locked behind a pairing token gate and cannot be loaded without an authenticated session.
-* **Low-USD Balance Warning System**: Configurable global alert threshold (\$0.20 USD default) and custom per-key override thresholds.
+### 📊 Responsive Web App (served by `python run.py`, default port 8844)
+A dependency-free single-page app (`web/app/`, vanilla ES modules, no CDN) that drives **every** tool the
+service exposes — the same operations available over Telegram and MCP.
+
+| Route | What it does |
+|---|---|
+| `#/overview` | Balance health (OK / LOW / OUT), service + bot + tunnel status, allocation counts |
+| `#/keys` | Venice keys, validation, deploy to agent configs, delegated sub-keys ($0.25 default cap) |
+| `#/allocations` | Mint allocations, copy the `https://venice.vmu.cash/claim/<token>` link, agent instructions + MCP snippet, inspect / revoke / delete |
+| `#/playground` | Light inference against any model tier (`xs`–`xl`) |
+| `#/agents` | Telegram agent bots, BotFather wizard, test pings |
+| `#/fleet` | Multi-node mesh: register nodes (with `remote_pairing_code`), sync, health |
+| `#/vault` | Disaster-recovery health, labeled snapshots, restore (backups dir only) |
+| `#/settings` | Supervisor restart / boot install, tunnel, pairing code reveal/rotate, LOW/OUT thresholds, config |
+| `#/tools` | MCP console — every MCP tool rendered as a schema-driven form |
+
+* **Guest vs paired**: unpaired visitors only see the **key validator** and the pairing form. Everything
+  else (and every privileged `/api/*` endpoint) requires the `X-Pairing-Code` header.
+* **All viewports**: mobile-first layout, off-canvas drawer below 1024px, tables collapse to cards below
+  720px, 44px touch targets, safe-area insets, light/dark themes, `prefers-reduced-motion`, keyboard
+  focus styles, `<dialog>`-based forms, live-region toasts.
+* **Hardened server**: strict CSP (no inline script), `nosniff`, `X-Frame-Options: DENY`,
+  `no-referrer`, 1 MB JSON body limit, path-traversal-safe static serving, secrets redacted from every
+  list response (`*_preview` + `has_*` fields only).
+* The classic dashboard is still available at **`/legacy/`**.
+* New endpoints: `GET /api/health`, `/api/overview`, `/api/balance`, `/api/pairing/code`, `/api/mcp/tools`;
+  `POST /api/balance/thresholds`, `/api/pairing/rotate`, `/api/subkeys/remove`, `/api/agent_bots/remove`,
+  `/api/mcp/call` (`{name, arguments}`) and `/api/mcp/rpc` (raw MCP JSON-RPC over HTTP).
 
 ### 🔌 Full Model Context Protocol (MCP) Server
 Exposes 20+ specialized tools and resources over stdio / JSON-RPC 2.0 for Claude Desktop, Cursor, Antigravity, and Hermes Agent.
@@ -253,12 +275,23 @@ pip install -e .
 cp .env.example .env
 # Set VENICE_API_KEY=your_venice_admin_key in .env
 
-# 4. Run tests
-pytest -v
+# 4. Run tests (sandboxed — never touches the live vault, configs or services)
+python -m pytest tests -q
 
-# 5. Launch web dashboard & gateway
-venice-key-manager web --host 0.0.0.0 --port 8660
+# 5. Launch web app + Telegram bot (+ supervisor-managed restarts: python supervisor.py --run)
+python run.py
 ```
+
+### 🧪 Test Suite
+
+* `tests/__init__.py` copies the vault into a temp sandbox and points `VENICE_VAULT_PATH`,
+  `VENICE_SUPERVISOR_STATE_DIR` and agent config deploy targets at temp files, so the suite can run
+  safely next to a live service. Set `VENICE_TESTS_USE_LIVE=1` to opt out of the sandbox.
+* Tests that hit real external APIs (Telegram `getMe` / ping, Venice balance / inference) are skipped
+  unless `VENICE_LIVE_TESTS=1`. The full live end-to-end flow requires `VENICE_E2E_LIVE=1`.
+* Legacy FastAPI-gateway tests skip automatically when their optional dependencies are not installed.
+* `tests/test_webapp.py` covers the web app: guest gating, redaction, MCP-over-HTTP, path traversal,
+  security headers, restore sandboxing, and Telegram command dispatch.
 
 ### Systemd Service Setup
 

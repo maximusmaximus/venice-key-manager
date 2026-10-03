@@ -1,3 +1,15 @@
+# --- legacy-suite dependency guard ---
+import unittest as _unittest
+try:  # The legacy FastAPI package (venice_key_manager/) needs extra deps + Python 3.8+
+    import pytest as _pytest  # noqa: F401
+    import fastapi as _fastapi  # noqa: F401
+    import pydantic as _pydantic  # noqa: F401
+    import httpx as _httpx  # noqa: F401
+    from unittest.mock import AsyncMock as _AsyncMock  # noqa: F401
+except ImportError as _exc:
+    raise _unittest.SkipTest("Legacy FastAPI suite skipped (missing dependency: %s)" % _exc)
+# --- end guard ---
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from venice_key_manager.report import DailyKeyReport

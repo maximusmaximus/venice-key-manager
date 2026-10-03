@@ -57,17 +57,25 @@ class FleetMeshManager:
             if hasattr(self.vault, "_save"):
                 self.vault._save()
 
-    def list_nodes(self, check_health: bool = False) -> List[Dict[str, Any]]:
-        """List all fleet nodes with optional live health checks."""
+    def _merged_nodes(self) -> Dict[str, Dict[str, Any]]:
+        # Re-read from the (auto-reloading) vault so other processes' edits are visible.
+        self._load_fleet_nodes()
         merged: Dict[str, Dict[str, Any]] = {}
         for k, v in DEFAULT_FLEET_NODES.items():
             merged[k] = dict(v)
         for k, v in self._custom_nodes.items():
             merged[k] = {**merged.get(k, {}), **v}
+        return merged
+
+    def list_nodes(self, check_health: bool = False) -> List[Dict[str, Any]]:
+        """List all fleet nodes with optional live health checks (secrets masked)."""
+        merged = self._merged_nodes()
 
         result = []
         for name, info in merged.items():
             node = dict(info)
+            secret = node.pop("pairing_code", None)
+            node["has_pairing_code"] = bool(secret)
             if check_health:
                 health = self.check_node_health(name, node.get("base_url"))
                 node["online"] = health.get("online", False)
@@ -81,26 +89,44 @@ class FleetMeshManager:
             result.append(node)
         return result
 
-    def get_node(self, name: str) -> Optional[Dict[str, Any]]:
+    def get_node(self, name: str, include_secret: bool = False) -> Optional[Dict[str, Any]]:
+        if include_secret:
+            merged = self._merged_nodes()
+            node = merged.get(name)
+            return dict(node) if node else None
         nodes = {n["name"]: n for n in self.list_nodes(check_health=False)}
         return nodes.get(name)
 
-    def register_node(self, name: str, base_url: str, label: str = "", ip: str = "", port: int = 8844) -> Dict[str, Any]:
-        """Register or update a remote peer node."""
+    def register_node(self, name: str, base_url: str, label: str = "", ip: str = "", port: int = 8844,
+                      pairing_code: str = "") -> Dict[str, Any]:
+        """Register or update a remote peer node.
+
+        ``pairing_code`` is the *remote* node's pairing code. It is stored in the
+        vault and sent as ``X-Pairing-Code`` on forwarded privileged requests.
+        """
+        self._load_fleet_nodes()
         clean_url = base_url.rstrip("/")
         node_info = {
             "name": name,
             "label": label or f"Node: {name}",
             "base_url": clean_url,
-            "ip": ip or clean_url.replace("http://", "").replace("https://", "").split(":")[0],
+            "ip": ip or clean_url.replace("http://", "").replace("https://", "").split(":")[0].split("/")[0],
             "port": port,
             "is_self": False
         }
+        existing = self._custom_nodes.get(name, {})
+        if pairing_code:
+            node_info["pairing_code"] = pairing_code
+        elif existing.get("pairing_code"):
+            node_info["pairing_code"] = existing["pairing_code"]
         self._custom_nodes[name] = node_info
         self._save_fleet_nodes()
-        return {"success": True, "node": node_info}
+        public = {k: v for k, v in node_info.items() if k != "pairing_code"}
+        public["has_pairing_code"] = bool(node_info.get("pairing_code"))
+        return {"success": True, "node": public}
 
     def remove_node(self, name: str) -> bool:
+        self._load_fleet_nodes()
         if name in self._custom_nodes:
             del self._custom_nodes[name]
             self._save_fleet_nodes()
@@ -154,9 +180,14 @@ class FleetMeshManager:
             except Exception as e:
                 return {"online": False, "status": "offline", "error": str(e), "latency_ms": None, "version": {}}
 
+    def call_remote_node(self, node_name: str, path: str, method: str = "GET",
+                         data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Compatibility alias used by the MCP server."""
+        return self.forward_request(node_name, path, method=method, payload=data)
+
     def forward_request(self, node_name: str, endpoint: str, method: str = "GET", payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Forward an API request to a remote peer node over Tailscale."""
-        node = self.get_node(node_name)
+        node = self.get_node(node_name, include_secret=True)
         if not node:
             return {"success": False, "error": f"Target node '{node_name}' not registered in fleet"}
 
@@ -164,8 +195,12 @@ class FleetMeshManager:
         target_url = f"{node['base_url'].rstrip('/')}{clean_ep}"
 
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
+        if body is None and method.upper() == "POST":
+            body = b"{}"
         headers = {"Content-Type": "application/json", "User-Agent": "Venice-Mesh-Proxy/1.0"}
-        req = urllib.request.Request(target_url, data=body, headers=headers, method=method)
+        if node.get("pairing_code"):
+            headers["X-Pairing-Code"] = str(node["pairing_code"])
+        req = urllib.request.Request(target_url, data=body, headers=headers, method=method.upper())
 
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
