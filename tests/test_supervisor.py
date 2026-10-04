@@ -34,6 +34,27 @@ class TestServiceSupervisor(unittest.TestCase):
         self.assertEqual(st.get("restarts_count"), 0)
         self.assertEqual(st.get("crash_history"), [])
 
+    def test_second_supervisor_exits_when_lock_held(self):
+        held = self.supervisor._acquire_instance_lock()
+        self.assertNotIn(held, (None, True))
+        try:
+            other = ServiceSupervisor(root_dir=self.root_path, port=8844)
+            with patch.object(other, "_run_supervisor_loop") as loop:
+                other.run_supervisor(child_args=["noop"])
+                loop.assert_not_called()
+        finally:
+            ServiceSupervisor._release_instance_lock(held)
+        # Once released, a new supervisor may start.
+        with patch.object(self.supervisor, "_run_supervisor_loop") as loop:
+            self.supervisor.run_supervisor(child_args=["noop"])
+            loop.assert_called_once()
+
+    def test_default_run_skips_when_port_already_served(self):
+        with patch("core.supervisor.is_port_open", return_value=True), \
+             patch.object(self.supervisor, "_run_supervisor_loop") as loop:
+            self.supervisor.run_supervisor()
+            loop.assert_not_called()
+
     def test_save_and_load_state(self):
         test_state = {
             "status": "RUNNING",
@@ -110,8 +131,13 @@ class TestServiceSupervisor(unittest.TestCase):
                 self.assertTrue(vbs.exists())
                 content = vbs.read_text(encoding="utf-8")
                 self.assertIn("supervisor.py", content)
+                self.assertIn("windows_watchdog_task", res.get("installed_methods", []))
+                create_calls = [str(c) for c in mock_run.call_args_list if "/Create" in str(c)]
+                self.assertTrue(any("VeniceKeyManagerWatchdog" in c and "MINUTE" in c for c in create_calls))
+                self.assertTrue(all("wscript.exe" in c for c in create_calls), "tasks must launch hidden via the VBS")
 
                 # Now test uninstall
+                mock_run.reset_mock()
                 un_res = self.supervisor.uninstall()
                 self.assertTrue(un_res.get("success"))
                 self.assertFalse(vbs.exists())

@@ -28,6 +28,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 STATE_FILE = PROJECT_ROOT / ".supervisor_state.json"
 SENTINEL_RESTART = PROJECT_ROOT / ".restart_requested"
 LOG_FILE = PROJECT_ROOT / ".supervisor.log"
+WINDOWS_TASK_NAME = "VeniceKeyManagerSupervisor"
+WINDOWS_WATCHDOG_TASK_NAME = "VeniceKeyManagerWatchdog"
 
 
 def is_port_open(port: int, host: str = "127.0.0.1", timeout: float = 1.0) -> bool:
@@ -137,7 +139,67 @@ class ServiceSupervisor:
     # Watchdog & Child Process Supervision
     # ---------------------------------------------------------
 
+    def _acquire_instance_lock(self):
+        """Take an exclusive, non-blocking OS lock; returns the handle or None if held elsewhere."""
+        lock_path = self.state_dir / ".supervisor.lock"
+        try:
+            fh = open(str(lock_path), "a+")
+        except Exception as e:
+            self.log(f"Warning: could not open instance lock ({e}); continuing without it.")
+            return True
+        try:
+            if os.name == "nt":
+                import msvcrt
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fh
+        except OSError:
+            fh.close()
+            return None
+
+    @staticmethod
+    def _release_instance_lock(fh) -> None:
+        if fh is None or fh is True:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            fh.close()
+        except Exception:
+            pass
+
     def run_supervisor(self, child_args: Optional[List[str]] = None, max_restarts: int = 0):
+        """Run the supervisor loop unless another supervisor already owns this install.
+
+        Safe to call from several auto-start triggers at once: the losers exit
+        immediately. When launched with the default service command, it also
+        refuses to start a duplicate if the port is already being served
+        (e.g. by a supervisor started before this guard existed).
+        """
+        lock = self._acquire_instance_lock()
+        if lock is None:
+            self.log("Another supervisor instance is already running; exiting.")
+            return
+        try:
+            if child_args is None and is_port_open(self.port):
+                self.log(f"Port {self.port} is already being served; not starting a duplicate service.")
+                return
+            return self._run_supervisor_loop(child_args=child_args, max_restarts=max_restarts)
+        finally:
+            self._release_instance_lock(lock)
+
+    def _run_supervisor_loop(self, child_args: Optional[List[str]] = None, max_restarts: int = 0):
         """
         Run the supervisor loop. Spawns child process and auto-restarts indefinitely
         if child crashes or exits unexpectedly.
@@ -340,47 +402,75 @@ class ServiceSupervisor:
             results["error"] = f"Unsupported platform: {system}"
             return results
 
+    @staticmethod
+    def _allow_task_on_battery(task_name: str) -> bool:
+        """Let a scheduled task start/keep running on battery and without a time limit (best effort)."""
+        ps = (
+            "$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries "
+            "-ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew; "
+            f"Set-ScheduledTask -TaskName '{task_name}' -Settings $s | Out-Null"
+        )
+        try:
+            res = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                                 capture_output=True, text=True, timeout=60)
+            return res.returncode == 0
+        except Exception:
+            return False
+
     def _install_windows(self, results: Dict[str, Any]) -> Dict[str, Any]:
-        """Install Windows startup VBScript and Task Scheduler job."""
+        """Install Windows startup VBScript, logon task and a 5-minute watchdog task."""
         python_exe = sys.executable
         supervisor_py = self.root_dir / "supervisor.py"
+        vbs_path: Optional[Path] = None
 
-        # 1. Startup Folder VBScript
+        # 1. Startup Folder VBScript (hidden window)
         appdata = os.environ.get("APPDATA")
         if appdata:
             startup_dir = Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
             if startup_dir.exists():
-                vbs_path = startup_dir / "start_venice_manager.vbs"
+                candidate = startup_dir / "start_venice_manager.vbs"
+                # Text mode already writes CRLF on Windows, so use plain "\n" here.
                 vbs_content = (
-                    f'Set WshShell = CreateObject("WScript.Shell")\r\n'
-                    f'WshShell.Run """{python_exe}"" ""{supervisor_py}"" --run", 0, False\r\n'
+                    f'Set WshShell = CreateObject("WScript.Shell")\n'
+                    f'WshShell.CurrentDirectory = "{self.root_dir}"\n'
+                    f'WshShell.Run """{python_exe}"" ""{supervisor_py}"" --run", 0, False\n'
                 )
                 try:
-                    vbs_path.write_text(vbs_content, encoding="utf-8")
+                    candidate.write_text(vbs_content, encoding="utf-8")
+                    vbs_path = candidate
                     results["installed_methods"].append("windows_startup_vbs")
-                    results["messages"].append(f"Installed Startup VBScript to {vbs_path}")
+                    results["messages"].append(f"Installed Startup VBScript to {candidate}")
                 except Exception as e:
                     results["messages"].append(f"Failed to write VBScript: {e}")
 
-        # 2. Windows Task Scheduler (ONLOGON)
-        try:
-            task_name = "VeniceKeyManagerSupervisor"
+        # Launch through the VBS so no console window appears (closing one would kill the service).
+        if vbs_path is not None:
+            tr_command = f'wscript.exe "{vbs_path}"'
+        else:
             tr_command = f'"{python_exe}" "{supervisor_py}" --run'
-            cmd = [
-                "schtasks", "/Create",
-                "/TN", task_name,
-                "/TR", tr_command,
-                "/SC", "ONLOGON",
-                "/F"
-            ]
-            res = subprocess.run(cmd, capture_output=True, text=True)
-            if res.returncode == 0:
-                results["installed_methods"].append("windows_task_scheduler")
-                results["messages"].append(f"Registered Windows Scheduled Task '{task_name}'")
-            else:
-                results["messages"].append(f"Scheduled task notice: {res.stderr.strip() or res.stdout.strip()}")
-        except Exception as e:
-            results["messages"].append(f"Scheduled task registration skipped: {e}")
+
+        # 2. Task Scheduler: start at logon + watchdog every 5 minutes.
+        #    Duplicate launches exit immediately thanks to the supervisor's instance lock.
+        tasks = [
+            (WINDOWS_TASK_NAME, ["/SC", "ONLOGON"], "windows_task_scheduler"),
+            (WINDOWS_WATCHDOG_TASK_NAME, ["/SC", "MINUTE", "/MO", "5"], "windows_watchdog_task"),
+        ]
+        for task_name, schedule, method in tasks:
+            try:
+                cmd = ["schtasks", "/Create", "/TN", task_name, "/TR", tr_command] + schedule + ["/F"]
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                if res.returncode == 0:
+                    results["installed_methods"].append(method)
+                    results["messages"].append(f"Registered Windows Scheduled Task '{task_name}'")
+                    self._allow_task_on_battery(task_name)
+                else:
+                    err = res.stderr.strip() or res.stdout.strip()
+                    if "ONLOGON" in schedule and "denied" in err.lower():
+                        err += (" (logon triggers need an elevated shell; the Startup VBScript and the "
+                                "5-minute watchdog already cover logon without admin rights)")
+                    results["messages"].append(f"Scheduled task notice ({task_name}): {err}")
+            except Exception as e:
+                results["messages"].append(f"Scheduled task '{task_name}' registration skipped: {e}")
 
         # 3. Inter-service integration with tailscale-a2a-manager launcher.py if present
         launcher_py = self.root_dir.parent / "tailscale-a2a-manager" / "launcher.py"
@@ -514,11 +604,13 @@ WantedBy=default.target
                     except Exception as e:
                         results["messages"].append(f"Failed removing VBS: {e}")
 
-            try:
-                subprocess.run(["schtasks", "/Delete", "/TN", "VeniceKeyManagerSupervisor", "/F"], capture_output=True)
-                results["removed"].append("windows_task_scheduler")
-            except Exception:
-                pass
+            for task_name, method in ((WINDOWS_TASK_NAME, "windows_task_scheduler"),
+                                      (WINDOWS_WATCHDOG_TASK_NAME, "windows_watchdog_task")):
+                try:
+                    subprocess.run(["schtasks", "/Delete", "/TN", task_name, "/F"], capture_output=True)
+                    results["removed"].append(method)
+                except Exception:
+                    pass
 
         elif system == "darwin":
             plist_path = Path.home() / "Library" / "LaunchAgents" / "com.venice.keymanager.plist"
@@ -567,12 +659,14 @@ WantedBy=default.target
                 vbs = Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "start_venice_manager.vbs"
                 if vbs.exists():
                     autostart_methods.append("windows_startup_vbs")
-            try:
-                res = subprocess.run('schtasks /Query /TN "VeniceKeyManagerSupervisor"', shell=True, capture_output=True, text=True)
-                if res.returncode == 0:
-                    autostart_methods.append("windows_task_scheduler")
-            except Exception:
-                pass
+            for task_name, method in ((WINDOWS_TASK_NAME, "windows_task_scheduler"),
+                                      (WINDOWS_WATCHDOG_TASK_NAME, "windows_watchdog_task")):
+                try:
+                    res = subprocess.run(f'schtasks /Query /TN "{task_name}"', shell=True, capture_output=True, text=True)
+                    if res.returncode == 0:
+                        autostart_methods.append(method)
+                except Exception:
+                    pass
 
         elif sys_name == "darwin":
             plist = Path.home() / "Library" / "LaunchAgents" / "com.venice.keymanager.plist"

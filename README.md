@@ -616,18 +616,23 @@ flowchart TD
 * **Rapid-Crash Backoff Defense**: If the process crashes repeatedly in under 3 seconds, the supervisor dynamically backs off up to 10 seconds to protect CPU resources.
 * **Live Telemetry & State Tracking**: Uptime, child process PID, restart counts, and crash history are persisted atomically in `.supervisor_state.json`.
 * **Zero-Downtime Remote IPC**: Supports graceful process recycling on-demand via the `.restart_requested` sentinel file, REST API (`POST /api/service/restart`), or Telegram (`/restart_service`).
+* **Single Instance Guarantee**: An OS file lock (`.supervisor.lock`) ensures only one supervisor ever runs, even when several auto-start triggers fire at once. A launch also exits if the port is already being served, so it never starts a duplicate service.
 
 ### 2. Cross-Platform 1-Click Boot Installation
 Auto-start on boot is supported across all major operating systems out of the box:
 
 #### 🪟 Windows Workstation
-Installs a silent VBScript in the Windows Startup folder and integrates with the A2A fleet launcher. Runs completely in the background without any CMD window popups:
+Everything runs hidden, with no CMD window that could be closed by accident:
+* **Startup VBScript** (`%APPDATA%\...\Startup\start_venice_manager.vbs`) starts the supervisor at logon.
+* **`VeniceKeyManagerWatchdog` scheduled task** re-launches the supervisor every 5 minutes if it has stopped for any reason. It is allowed to run on battery, has no time limit, and needs no admin rights.
+* **`VeniceKeyManagerSupervisor` logon task** is optional. It needs an elevated shell, and the two items above already cover logon without it.
 ```powershell
 # 1-Click PowerShell Installer
 powershell -ExecutionPolicy Bypass -File scripts\install_auto_restart.ps1
 
-# Or via CLI
-python run.py service install
+# Or via CLI (run from an elevated shell to also register the logon task)
+python supervisor.py --install
+python supervisor.py --status     # shows active methods: windows_startup_vbs, windows_watchdog_task
 ```
 
 #### 🍎 macOS (Apple Silicon `mcmini`)
