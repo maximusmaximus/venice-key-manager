@@ -245,12 +245,20 @@ class VeniceClient:
 
     def delete_key(self, key_id: str, admin_key: Optional[str] = None) -> Dict[str, Any]:
         """Deletes/Revokes an API key by ID."""
-        url = f"{self.base_url}/api_keys/{key_id}"
         try:
             headers = self._get_headers(key=admin_key, require_admin=True)
-            resp = requests.delete(url, headers=headers, timeout=15)
+            # Venice API expects DELETE /api_keys?id={key_id}
+            url_query = f"{self.base_url}/api_keys?id={key_id}"
+            resp = requests.delete(url_query, headers=headers, json={"id": key_id}, timeout=15)
             if resp.status_code in (200, 204):
                 return {"success": True, "key_id": key_id, "message": "Key revoked successfully"}
+            
+            # Fallback to path parameter /api_keys/{key_id}
+            url_path = f"{self.base_url}/api_keys/{key_id}"
+            resp_path = requests.delete(url_path, headers=headers, timeout=15)
+            if resp_path.status_code in (200, 204):
+                return {"success": True, "key_id": key_id, "message": "Key revoked successfully"}
+
             return {"success": False, "status_code": resp.status_code, "error": resp.text}
         except Exception as e:
             return {"success": False, "error": str(e)}

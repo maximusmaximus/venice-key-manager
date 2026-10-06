@@ -31,6 +31,7 @@ from core.tiers import (
     is_tier_allowed
 )
 from core.supervisor import ServiceSupervisor
+from core.guard import KeyCreationGuard, GuardResult
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("venice_tg_bot")
@@ -39,6 +40,8 @@ logger = logging.getLogger("venice_tg_bot")
 class VeniceTelegramBot:
     def __init__(self, vault: Optional[KeyVault] = None):
         self.vault = vault or KeyVault()
+        self.bot_agent_name = "v3n15PE_bot"
+        self.guard = KeyCreationGuard(self.vault)
         self.tg_manager = TelegramAgentManager(self.vault)
         self.mesh = FleetMeshManager(self.vault)
         self.token = self.vault.get_telegram_master_token()
@@ -51,9 +54,10 @@ class VeniceTelegramBot:
         last_alert = self.vault.get_last_balance_alert_state()
         self.last_notified_balance_status = last_alert.get("status")
 
-    def _get_venice_client(self) -> VeniceClient:
+    def _get_venice_client(self, caller_agent: Optional[str] = None) -> VeniceClient:
+        caller = caller_agent or self.bot_agent_name
         return VeniceClient(
-            admin_key=self.vault.get_venice_admin_key(),
+            admin_key=self.vault.get_venice_admin_key(caller_agent=caller),
             inference_key=self.vault.get_venice_inference_key(),
             base_url=self.vault.data.get("venice", {}).get("base_url", "")
         )
@@ -503,65 +507,47 @@ class VeniceTelegramBot:
             agent, tier, limit_str = rest.rsplit("_", 2)
             limit_val = float(limit_str) if limit_str != "0" else None
             t_info = MODEL_TIER_MAPPING.get(tier, {})
-            admin_key = self.vault.get_venice_admin_key()
 
-            if admin_key:
-                res = client.create_key(
-                    description=f"{agent} ({tier.upper()} Tier)",
-                    key_type="INFERENCE",
-                    limit_usd=limit_val,
-                    admin_key=admin_key
-                )
-                if res.get("success"):
-                    key_obj = res.get("key", {})
-                    key_obj["maxModelTier"] = tier
-                    key_obj["agent"] = agent
-                    self.vault.store_venice_key(key_obj)
-                    raw_k = key_obj.get("apiKey") or key_obj.get("key") or key_obj.get("id")
-                    lim_str = f"${limit_val:.2f} USD" if limit_val else "Unlimited"
+            res = self.provision_agent_key(agent=agent, tier=tier, budget_usd=limit_val)
+            if res.get("success"):
+                key_id = res.get("key_id")
+                raw_k = res.get("api_key")
+                lim_usd = res.get("budget_usd")
+                lim_str = f"${lim_usd:.2f} USD" if lim_usd else "Unlimited"
 
-                    txt = (
-                        f"✅ *Agent Key Successfully Provisioned!*\n\n"
-                        f"• *Agent*: `{agent}`\n"
-                        f"• *Model Quality Tier*: `{tier.upper()}` ({t_info.get('label')})\n"
-                        f"• *Monthly Budget*: `{lim_str}`\n"
-                        f"• *Key ID*: `{key_obj.get('id')}`\n"
-                        f"• *API Key*: `{raw_k}`\n\n"
-                        f"Stored in vault with model quality gating enforced."
-                    )
-                    kb = {
-                        "inline_keyboard": [
-                            [{"text": "🚀 Deploy to Agent Config", "callback_data": f"deploy_key_{key_obj.get('id')}"}],
-                            [{"text": f"⚡ Test Tier {tier.upper()} ({t_info.get('default_model')})", "callback_data": f"infer_run_{tier}"}],
-                            [{"text": "🔑 View All Keys", "callback_data": "menu_keys"}],
-                            [{"text": "« Back to Main Dashboard", "callback_data": "menu_main"}]
-                        ]
-                    }
-                    self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
-                else:
-                    self.edit_message(
-                        chat_id,
-                        msg_id,
-                        f"❌ *Failed to create key*: `{res.get('error')}`",
-                        reply_markup=self.back_to_main_keyboard()
-                    )
-            else:
-                lim_str = f"${limit_val:.2f} USD" if limit_val else "Unlimited"
                 txt = (
-                    f"⚠️ *Venice Admin API Key Required for Remote Issuance*\n\n"
-                    f"Currently operating in *Inference Mode*. To create new keys via Venice API, an Admin key is required.\n\n"
-                    f"You can either:\n"
-                    f"1. *Bind Active Inference Key*: Allocate existing credentials to `{agent}` under *Tier {tier.upper()}* with local policy gating.\n"
-                    f"2. Configure Venice Admin Key via `/set_admin_key <key>`."
+                    f"✅ *Agent Key Successfully Provisioned!*\n\n"
+                    f"• *Agent*: `{agent}`\n"
+                    f"• *Model Quality Tier*: `{tier.upper()}` ({t_info.get('label')})\n"
+                    f"• *Monthly Budget*: `{lim_str}`\n"
+                    f"• *Key ID*: `{key_id}`\n"
+                    f"• *API Key*: `{raw_k}`\n\n"
+                    f"Stored in vault with model quality gating enforced."
                 )
+                if res.get("warning"):
+                    txt += f"\n\n⚠️ *Notice*: {res.get('warning')}"
+
                 kb = {
                     "inline_keyboard": [
-                        [{"text": f"📥 Bind Active Key as Tier {tier.upper()}", "callback_data": f"wiz_bind_{agent}_{tier}_{int(limit_val or 0)}"}],
-                        [{"text": "« Back to Tier Selection", "callback_data": f"wiz_agent_{agent}"}],
-                        [{"text": "« Main Dashboard", "callback_data": "menu_main"}]
+                        [{"text": "🚀 Deploy to Agent Config", "callback_data": f"deploy_key_{key_id}"}],
+                        [{"text": f"⚡ Test Tier {tier.upper()} ({t_info.get('default_model')})", "callback_data": f"infer_run_{tier}"}],
+                        [{"text": "🔑 View All Keys", "callback_data": "menu_keys"}],
+                        [{"text": "« Back to Main Dashboard", "callback_data": "menu_main"}]
                     ]
                 }
                 self.edit_message(chat_id, msg_id, txt, reply_markup=kb)
+            else:
+                err = res.get("error", "Unknown error")
+                if res.get("abuse_detected"):
+                    txt = f"🛡️ *Key Creation Blocked (Anti-Abuse Safeguard)*\n\n⚠️ `{err}`"
+                else:
+                    txt = f"❌ *Failed to create key*: `{err}`"
+                self.edit_message(
+                    chat_id,
+                    msg_id,
+                    txt,
+                    reply_markup=self.back_to_main_keyboard()
+                )
 
         # Bind active key to agent with tier limit
         elif data.startswith("wiz_bind_"):
@@ -1036,8 +1022,9 @@ class VeniceTelegramBot:
         auto_deploy: bool = False
     ) -> Dict[str, Any]:
         """
-        Provisions a Venice key or delegated sub-key for an agent with quality tier gating and budget caps.
-        Works in both Venice Admin Key mode and Inference Mode.
+        Provisions a Venice key or delegated sub-key for an agent with quality tier gating,
+        anti-abuse budget caps, and rate limits.
+        Works in both Venice Admin Key mode (scoped to @v3n15PE_bot) and Inference Mode.
         """
         clean_agent = (agent or "hermes-music").strip().lower()
         if clean_agent == "hermes":
@@ -1047,8 +1034,32 @@ class VeniceTelegramBot:
             clean_tier = "s"
 
         t_info = MODEL_TIER_MAPPING.get(clean_tier, {})
-        admin_key = self.vault.get_venice_admin_key()
-        client = self._get_venice_client()
+
+        # --- 1. Anti-Abuse Guard Enforcement ---
+        guard_res = self.guard.validate_key_request(
+            caller_agent=self.bot_agent_name,
+            key_type="INFERENCE",
+            budget_usd=budget_usd,
+            tier=clean_tier,
+            target_agent=clean_agent
+        )
+        if not guard_res.allowed:
+            logger.warning(f"Anti-abuse: Blocked key creation request: {guard_res.reason}")
+            return {
+                "success": False,
+                "error": guard_res.reason,
+                "abuse_detected": True,
+                "agent": clean_agent,
+                "tier": clean_tier
+            }
+
+        sanitized_budget = guard_res.sanitized_budget
+        clean_tier = guard_res.sanitized_tier
+        warning_msg = guard_res.warning
+
+        # --- 2. Admin Key Retrieval (Scoped strictly to @v3n15PE_bot) ---
+        admin_key = self.vault.get_venice_admin_key(caller_agent=self.bot_agent_name)
+        client = self._get_venice_client(caller_agent=self.bot_agent_name)
 
         key_id = None
         raw_k = None
@@ -1057,7 +1068,7 @@ class VeniceTelegramBot:
             res = client.create_key(
                 description=f"{clean_agent} ({clean_tier.upper()} Tier)",
                 key_type="INFERENCE",
-                limit_usd=budget_usd,
+                limit_usd=sanitized_budget,
                 admin_key=admin_key
             )
             if res.get("success"):
@@ -1067,6 +1078,14 @@ class VeniceTelegramBot:
                 self.vault.store_venice_key(key_obj)
                 raw_k = key_obj.get("apiKey") or key_obj.get("key") or key_obj.get("id")
                 key_id = key_obj.get("id")
+                # Record successful key creation in anti-abuse audit log
+                self.guard.record_key_creation(
+                    caller_agent=self.bot_agent_name,
+                    key_id=key_id,
+                    budget_usd=sanitized_budget,
+                    tier=clean_tier,
+                    target_agent=clean_agent
+                )
             else:
                 logger.warning(f"Remote Venice key creation failed ({res.get('error')}); falling back to local provision")
                 admin_key = None
@@ -1085,16 +1104,24 @@ class VeniceTelegramBot:
                 "apiKeyType": "INFERENCE",
                 "maxModelTier": clean_tier,
                 "agent": clean_agent,
-                "consumptionLimits": {"usd": budget_usd} if budget_usd else {},
+                "consumptionLimits": {"usd": sanitized_budget} if sanitized_budget else {},
                 "status": "ACTIVE"
             }
             self.vault.store_venice_key(key_obj)
+            # Record local key creation in anti-abuse audit log
+            self.guard.record_key_creation(
+                caller_agent=self.bot_agent_name,
+                key_id=key_id,
+                budget_usd=sanitized_budget,
+                tier=clean_tier,
+                target_agent=clean_agent
+            )
 
         # Store in subkeys record
         sk_record = {
             "id": key_id,
             "label": f"{clean_agent} ({clean_tier.upper()} Tier)",
-            "budget_usd": budget_usd if budget_usd is not None else 5.0,
+            "budget_usd": sanitized_budget,
             "period": "MONTH",
             "quality_tier": clean_tier,
             "assigned_agent": clean_agent,
@@ -1116,9 +1143,10 @@ class VeniceTelegramBot:
             "tier": clean_tier,
             "tier_label": t_info.get("label", clean_tier.upper()),
             "default_model": t_info.get("default_model", ""),
-            "budget_usd": budget_usd,
+            "budget_usd": sanitized_budget,
             "key_id": key_id,
             "api_key": raw_k,
+            "warning": warning_msg,
             "deployed": deploy_res.get("success") if deploy_res else False,
             "deploy_result": deploy_res
         }
@@ -1219,16 +1247,20 @@ class VeniceTelegramBot:
         if res.get("success"):
             key_id = res.get("key_id")
             raw_key = res.get("api_key")
+            act_budget = res.get("budget_usd", budget)
             txt = (
                 f"✅ *Agent Key Successfully Provisioned!*\n\n"
                 f"• *Target Agent*: `{agent}`\n"
                 f"• *Model Quality Tier*: `{tier.upper()}` ({t_info.get('label')})\n"
                 f"• *Default Model*: `{t_info.get('default_model')}`\n"
-                f"• *Monthly Budget Cap*: `${budget:.2f} USD`\n"
+                f"• *Monthly Budget Cap*: `${act_budget:.2f} USD`\n"
                 f"• *Key ID*: `{key_id}`\n\n"
                 f"🔑 *API Key*:\n`{raw_key}`\n\n"
                 f"Registered in local vault with Tier `{tier.upper()}` model gating enforced."
             )
+            if res.get("warning"):
+                txt += f"\n\n⚠️ *Notice*: {res.get('warning')}"
+
             kb = {
                 "inline_keyboard": [
                     [{"text": f"🚀 Deploy to {agent}", "callback_data": f"deploy_key_{key_id}"}],
@@ -1239,7 +1271,12 @@ class VeniceTelegramBot:
             }
             self.send_message(chat_id, txt, reply_markup=kb)
         else:
-            self.send_message(chat_id, f"❌ *Failed to create key*: `{res.get('error')}`", reply_markup=self.main_menu_keyboard())
+            err = res.get("error", "Unknown error")
+            if res.get("abuse_detected"):
+                txt = f"🛡️ *Key Creation Blocked (Anti-Abuse Safeguard)*\n\n⚠️ `{err}`"
+            else:
+                txt = f"❌ *Failed to create key*: `{err}`"
+            self.send_message(chat_id, txt, reply_markup=self.main_menu_keyboard())
 
     def _execute_plain_text_mint(self, chat_id: str, agent: str, tier: str, count: int):
         t_info = MODEL_TIER_MAPPING.get(tier, {})
@@ -1433,6 +1470,7 @@ class VeniceTelegramBot:
             "• `/subkeys` - List active provisioned agent keys\n"
             "• `/allocations` - View or mint Cloud DNS claim links\n"
             "• `/balance` - Check live account balance\n"
+            "• `/guard_status` - View anti-abuse quotas & usage\n"
             "• `/pair_code` - View browser machine pairing code\n"
             "• `/service_status` or `/status` - Check auto-restart watchdog\n"
             "• `/restart_service` - Remotely recycle the service\n"
@@ -1630,6 +1668,24 @@ class VeniceTelegramBot:
 
         elif cmd == "/balance":
             self._handle_balance_command(chat_id)
+
+        elif cmd in ("/guard_status", "/abuse_status", "/quota", "/guard"):
+            metrics = self.guard.get_abuse_metrics(self.bot_agent_name)
+            cooldown_str = f"WAIT {metrics['cooldown_remaining_seconds']}s ⏳" if metrics['cooldown_remaining_seconds'] > 0 else "READY ✅"
+            txt = (
+                "🛡️ *Anti-Abuse Safeguards & Key Provisioning Quota*\n\n"
+                f"• *Agent*: `@{metrics['agent']}`\n"
+                f"• *Admin Privilege*: `{'AUTHORIZED ✅' if metrics['is_authorized_admin'] else 'RESTRICTED ⚪'}`\n"
+                f"• *Hourly Usage*: `{metrics['keys_created_past_hour']} / {metrics['max_keys_per_hour']} keys`\n"
+                f"• *Daily Usage*: `{metrics['keys_created_past_24h']} / {metrics['max_keys_per_day']} keys`\n"
+                f"• *Cooldown Status*: `{cooldown_str}`\n"
+                f"• *Active Keys*: `{metrics['total_active_keys']} / {metrics['max_active_keys']}`\n"
+                f"• *Max Budget Cap*: `${metrics['max_budget_per_key_usd']:.2f} USD`\n"
+                f"• *Default Budget*: `${metrics['default_budget_usd']:.2f} USD`\n"
+                f"• *Allowed Key Types*: `{', '.join(metrics['allowed_key_types'])}`\n\n"
+                "Autonomous agents are strictly restricted to INFERENCE keys with automated spending caps."
+            )
+            self.send_message(chat_id, txt, reply_markup=self.back_to_main_keyboard())
 
         elif cmd == "/set_admin_key":
             parts = text.split(maxsplit=1)

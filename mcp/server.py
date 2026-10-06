@@ -19,6 +19,7 @@ from core.venice_client import VeniceClient
 from core.tg_manager import TelegramAgentManager
 from core.deployer import ConfigDeployer
 from core.mesh import FleetMeshManager
+from core.guard import KeyCreationGuard
 
 logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("venice_mcp")
@@ -31,12 +32,13 @@ class VeniceMCPServer:
 
     def __init__(self, vault: Optional[KeyVault] = None):
         self.vault = vault if vault is not None else KeyVault()
+        self.guard = KeyCreationGuard(self.vault)
         self.tg_manager = TelegramAgentManager(self.vault)
         self.mesh = FleetMeshManager(self.vault)
 
-    def _get_venice_client(self) -> VeniceClient:
+    def _get_venice_client(self, caller_agent: Optional[str] = None) -> VeniceClient:
         return VeniceClient(
-            admin_key=self.vault.get_venice_admin_key(),
+            admin_key=self.vault.get_venice_admin_key(caller_agent=caller_agent),
             inference_key=self.vault.get_venice_inference_key(),
             base_url=self.vault.data.get("venice", {}).get("base_url", "")
         )
@@ -562,21 +564,49 @@ class VeniceMCPServer:
             return client.list_keys(admin_key=admin_key)
 
         elif name == "venice_create_key":
+            caller_agent = args.get("caller_agent") or args.get("agent_name")
             desc = args.get("description", "Agent Key")
             k_type = args.get("key_type", "INFERENCE")
             limit = args.get("limit_usd")
             period = args.get("limit_period", "MONTH")
             expires = args.get("expires_at")
+            admin_key = args.get("admin_key")
+
+            # Anti-abuse validation if caller is v3n15PE_bot or agent caller
+            if caller_agent and self.guard.normalize_agent_name(caller_agent) in ("v3n15pe_bot", "v3n15pe"):
+                guard_res = self.guard.validate_key_request(
+                    caller_agent=caller_agent,
+                    key_type=k_type,
+                    budget_usd=limit,
+                    tier="s"
+                )
+                if not guard_res.allowed:
+                    return {"success": False, "error": guard_res.reason, "abuse_detected": True}
+                limit = guard_res.sanitized_budget
+                if not admin_key:
+                    admin_key = self.vault.get_venice_admin_key(caller_agent=caller_agent)
+            elif not admin_key:
+                # If caller is not v3n15PE_bot, admin key is only available if global admin key is set
+                admin_key = self.vault.get_venice_admin_key(caller_agent=caller_agent)
+
             res = client.create_key(
                 description=desc,
                 key_type=k_type,
                 limit_usd=limit,
                 limit_period=period,
-                expires_at=expires
+                expires_at=expires,
+                admin_key=admin_key
             )
             if res.get("success"):
                 key_obj = res.get("key", {})
                 self.vault.store_venice_key(key_obj)
+                if caller_agent:
+                    self.guard.record_key_creation(
+                        caller_agent=caller_agent,
+                        key_id=key_obj.get("id", ""),
+                        budget_usd=limit or 0.0,
+                        tier="s"
+                    )
             return res
 
         elif name == "venice_revoke_key":

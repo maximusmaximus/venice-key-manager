@@ -3,6 +3,8 @@ Unit test suite verifying Plain Text Key Creation, Minting, and NLP Intent Dispa
 """
 
 import sys
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -17,8 +19,10 @@ from telegram.bot import VeniceTelegramBot
 
 class TestPlainTextKeyProvisioning(unittest.TestCase):
     def setUp(self):
-        self.vault = KeyVault()
+        self.test_dir = tempfile.mkdtemp()
+        self.vault = KeyVault(vault_path=Path(self.test_dir) / "test_vault.json")
         self.bot = VeniceTelegramBot(vault=self.vault)
+        self.bot.guard.cooldown_seconds = 0.0
         self.test_chat_id = "123456789"
         self.bot.authorized_chat_id = self.test_chat_id
 
@@ -27,6 +31,9 @@ class TestPlainTextKeyProvisioning(unittest.TestCase):
             self.sends.append({"chat_id": chat_id, "text": text, "reply_markup": reply_markup})
             return {"ok": True}
         self.bot.send_message = mock_send
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def test_1_plain_text_make_key_command(self):
         """Tests /make_key, /create_key, and /create_subkey commands with arguments."""

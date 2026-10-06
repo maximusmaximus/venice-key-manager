@@ -109,11 +109,14 @@ def _has_valuable_keys(data: Dict[str, Any]) -> bool:
     tg = data.get("telegram", {})
     subkeys = data.get("subkeys", [])
     allocations = data.get("allocations", [])
+    sec = data.get("security", {})
     if venice.get("admin_key") or venice.get("inference_key") or venice.get("keys"):
         return True
     if tg.get("master_bot_token") or tg.get("agent_bots"):
         return True
     if subkeys or allocations:
+        return True
+    if sec.get("agent_admin_keys"):
         return True
     return False
 
@@ -387,6 +390,10 @@ class KeyVault:
 
             if not security.get("pairing_code") and b_sec.get("pairing_code"):
                 security["pairing_code"] = b_sec["pairing_code"]
+                changed = True
+
+            if not security.get("agent_admin_keys") and b_sec.get("agent_admin_keys"):
+                security["agent_admin_keys"] = b_sec["agent_admin_keys"]
                 changed = True
 
             if not cloudflare.get("domain") and b_cf.get("domain"):
@@ -747,7 +754,81 @@ class KeyVault:
 
     # --- Venice Key Helpers ---
 
-    def get_venice_admin_key(self) -> str:
+    # --- Venice Admin & Scoped Agent Admin Key Helpers ---
+
+    def get_agent_admin_key(self, agent_name: str) -> str:
+        """
+        Retrieves the Venice Admin API key scoped specifically to a designated agent.
+        Only authorized agents (e.g. v3n15PE_bot) have access to their scoped admin credentials.
+        """
+        if not agent_name:
+            return ""
+        clean = str(agent_name).strip().lower().lstrip("@")
+
+        # 1. Check security.agent_admin_keys mapping
+        sec_keys = self.data.get("security", {}).get("agent_admin_keys", {})
+        for k, v in sec_keys.items():
+            if str(k).strip().lower().lstrip("@") == clean and v:
+                return str(v).strip()
+
+        # 2. Check telegram.agent_bots profile
+        bots = self.data.get("telegram", {}).get("agent_bots", {})
+        for name, b in bots.items():
+            if str(name).strip().lower().lstrip("@") == clean:
+                admin_k = b.get("admin_key")
+                if admin_k:
+                    return str(admin_k).strip()
+
+        # 3. Dedicated environment override for v3n15PE_bot
+        if clean in ("v3n15pe_bot", "v3n15pe"):
+            env_k = os.environ.get("V3N15PE_ADMIN_KEY") or os.environ.get("VENICE_ADMIN_KEY_V3N15PE")
+            if env_k:
+                return env_k.strip()
+
+        return ""
+
+    def set_agent_admin_key(self, agent_name: str, key: str) -> None:
+        """
+        Stores an admin key scoped strictly to a specific agent in both
+        the security mapping and the agent bot's profile.
+        """
+        if not agent_name:
+            return
+        clean = str(agent_name).strip().lower().lstrip("@")
+        clean_key = key.strip()
+
+        # Store in security.agent_admin_keys
+        sec = self.data.setdefault("security", {}).setdefault("agent_admin_keys", {})
+        sec[clean] = clean_key
+
+        # Mirror in telegram.agent_bots
+        bots = self.data.setdefault("telegram", {}).setdefault("agent_bots", {})
+        matched = False
+        for name, b in bots.items():
+            if str(name).strip().lower().lstrip("@") == clean:
+                b["admin_key"] = clean_key
+                matched = True
+                break
+        if not matched and agent_name in bots:
+            bots[agent_name]["admin_key"] = clean_key
+
+        self._save(force=True, create_snapshot=True)
+
+    def get_venice_admin_key(self, caller_agent: Optional[str] = None) -> str:
+        """
+        Returns the Venice admin key.
+        - If caller_agent is provided: returns the admin key ONLY if that agent is
+          specifically authorized or configured with scoped admin credentials.
+          If caller_agent has no admin privileges, returns empty string ("") to block access.
+        - If caller_agent is None: returns the global admin key (if configured in env/vault).
+        """
+        if caller_agent:
+            agent_admin = self.get_agent_admin_key(caller_agent)
+            if agent_admin:
+                return agent_admin
+            # Explicit caller specified but unauthorized for admin account -> deny access
+            return ""
+
         return os.environ.get("VENICE_ADMIN_KEY") or self.data.get("venice", {}).get("admin_key", "")
 
     def set_venice_admin_key(self, key: str) -> None:
@@ -759,6 +840,22 @@ class KeyVault:
                 self.auto_recall(sync_venice_remote=True)
             except Exception:
                 pass
+
+    def get_key_creation_history(self, caller_agent: str) -> List[Dict[str, Any]]:
+        """Retrieves key creation audit logs for rate-limiting and anti-abuse verification."""
+        clean = str(caller_agent or "").strip().lower().lstrip("@")
+        return self.data.get("security", {}).get("key_creation_audit", {}).get(clean, [])
+
+    def record_key_creation(self, caller_agent: str, record: Dict[str, Any]) -> None:
+        """Appends a key creation event to the audit trail with sliding window retention."""
+        clean = str(caller_agent or "").strip().lower().lstrip("@")
+        audit = self.data.setdefault("security", {}).setdefault("key_creation_audit", {})
+        history = audit.setdefault(clean, [])
+        history.append(record)
+        # Retain last 200 records per agent
+        if len(history) > 200:
+            audit[clean] = history[-200:]
+        self._save(force=True, create_snapshot=False)
 
     def get_venice_inference_key(self) -> str:
         return os.environ.get("VENICE_INFERENCE_KEY") or os.environ.get("VENICE_API_KEY") or self.data.get("venice", {}).get("inference_key", "")

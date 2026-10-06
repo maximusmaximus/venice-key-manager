@@ -40,6 +40,7 @@ from core.tiers import MODEL_TIER_ORDER, MODEL_TIER_MAPPING, is_tier_allowed, re
 from core.mesh import FleetMeshManager
 from core.tunnel import CloudflareTunnelManager
 from core.supervisor import ServiceSupervisor
+from core.guard import KeyCreationGuard
 
 logger = logging.getLogger("venice_web")
 
@@ -1160,9 +1161,31 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             })
 
         # Mode 2: Generate remotely via Venice Admin API
+        caller_agent = str(body.get("caller_agent") or body.get("agent_name") or "").strip()
+        guard = KeyCreationGuard(self.vault)
+
         if admin_key_param:
             self.vault.set_venice_admin_key(admin_key_param)
-        active_admin = self.vault.get_venice_admin_key()
+
+        # Scoped admin key access: only v3n15PE_bot can leverage the bot's admin account
+        if caller_agent and guard.normalize_agent_name(caller_agent) in ("v3n15pe_bot", "v3n15pe"):
+            guard_res = guard.validate_key_request(
+                caller_agent=caller_agent,
+                key_type=k_type,
+                budget_usd=limit_val,
+                tier=max_tier
+            )
+            if not guard_res.allowed:
+                return self._send_json({
+                    "success": False,
+                    "error": guard_res.reason,
+                    "abuse_detected": True
+                }, status=400)
+            limit_val = guard_res.sanitized_budget
+            active_admin = self.vault.get_venice_admin_key(caller_agent=caller_agent)
+        else:
+            active_admin = self.vault.get_venice_admin_key(caller_agent=caller_agent if caller_agent else None)
+
         if not active_admin:
             return self._send_json({
                 "success": False,
@@ -1182,6 +1205,13 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             key_obj = res.get("key", {})
             key_obj["maxModelTier"] = max_tier
             self.vault.store_venice_key(key_obj)
+            if caller_agent:
+                guard.record_key_creation(
+                    caller_agent=caller_agent,
+                    key_id=key_obj.get("id", ""),
+                    budget_usd=limit_val or 0.0,
+                    tier=max_tier
+                )
             # The freshly generated secret is returned exactly once so it can be copied.
         return self._send_json(res)
 
