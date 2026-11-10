@@ -41,6 +41,7 @@ from telegram.bot import VeniceTelegramBot
 from mcp.server import VeniceMCPServer
 from core.tunnel import CloudflareTunnelManager
 from core.supervisor import ServiceSupervisor
+from core.reporter import AgentInferenceReporter
 
 
 def run_all(port: int = 8844):
@@ -293,6 +294,40 @@ def handle_cli_commands(args):
         elif args.subcommand == "supervisor":
             supervisor.run_supervisor()
 
+    elif args.command == "report":
+        import json as _json
+        if getattr(args, "enable", False):
+            vault.set_report_settings(enabled=True)
+        elif getattr(args, "disable", False):
+            vault.set_report_settings(enabled=False)
+        if getattr(args, "interval", None) is not None:
+            vault.set_report_settings(enabled=True, interval_hours=float(args.interval))
+
+        reporter = AgentInferenceReporter(vault=vault)
+        data = reporter.generate_report()
+        if getattr(args, "json", False):
+            print(_json.dumps(data, indent=2))
+        else:
+            print("\n" + reporter.format_cli_text(data) + "\n")
+
+        if getattr(args, "send", False):
+            bot = VeniceTelegramBot(vault=vault)
+            if bot.authorized_chat_id and bot.token:
+                md = reporter.format_telegram_markdown(data, scheduled=False)
+                res = bot.send_message(bot.authorized_chat_id, md, reply_markup=bot.report_keyboard())
+                if res.get("ok"):
+                    acc = data.get("account", {})
+                    vault.record_report_dispatch(
+                        usd_balance=float(acc.get("usd", 0.0) or 0.0),
+                        diem_balance=float(acc.get("diem", 0.0) or 0.0),
+                        summary=data.get("summary", {})
+                    )
+                    print("✅ Dispatched agent inference report to Telegram.\n")
+                else:
+                    print(f"❌ Telegram send failed: {res.get('error') or res}\n")
+            else:
+                print("⚠️ Authorized Telegram chat_id or master bot token not configured.\n")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Venice & Telegram Key Management Suite")
@@ -342,6 +377,14 @@ def main():
     svc_sub.add_parser("uninstall", help="Uninstall boot auto-start service")
     svc_sub.add_parser("restart", help="Trigger graceful process restart")
     svc_sub.add_parser("supervisor", help="Run supervisor watchdog loop")
+
+    # Agent inference & keep-alive report commands
+    rpt_parser = subparsers.add_parser("report", help="Generate per-agent inference & service uptime report")
+    rpt_parser.add_argument("--json", action="store_true", help="Output structured JSON report")
+    rpt_parser.add_argument("--send", action="store_true", help="Dispatch report immediately to Telegram")
+    rpt_parser.add_argument("--interval", type=float, default=None, help="Set scheduled report interval in hours")
+    rpt_parser.add_argument("--enable", action="store_true", help="Enable scheduled Telegram reports")
+    rpt_parser.add_argument("--disable", action="store_true", help="Pause scheduled Telegram reports")
 
     args = parser.parse_args()
 

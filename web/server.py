@@ -41,6 +41,7 @@ from core.mesh import FleetMeshManager
 from core.tunnel import CloudflareTunnelManager
 from core.supervisor import ServiceSupervisor
 from core.guard import KeyCreationGuard
+from core.reporter import AgentInferenceReporter
 
 logger = logging.getLogger("venice_web")
 
@@ -677,6 +678,12 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/vault/backups":
             return self._send_json({"success": True, "backups": self.vault.list_backups()})
 
+        if path == "/api/reports/agent_usage":
+            reporter = AgentInferenceReporter(vault=self.vault, client=client if self.vault.get_venice_admin_key() else None)
+            report = reporter.generate_report()
+            report["history"] = self.vault.get_report_history(limit=20)
+            return self._send_json(redact(report))
+
         return self._send_json({"success": False, "error": "Endpoint not found"}, status=404)
 
     # ------------------------------------------------------------------ POST
@@ -981,10 +988,13 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             temperature = _to_float(body.get("temperature"), 0.7, "temperature")
             key_id = body.get("key_id", "")
 
+            inferred_agent = str(body.get("agent") or "web-playground").strip()
             if key_id:
                 key_entry = next((k for k in self.vault.get_venice_keys()
                                   if k.get("id") == key_id or k.get("apiKey") == key_id), None)
                 if key_entry:
+                    if key_entry.get("agent") or key_entry.get("assigned_agent"):
+                        inferred_agent = str(key_entry.get("agent") or key_entry.get("assigned_agent"))
                     key_max_tier = key_entry.get("maxModelTier", "xl")
                     req_tier = resolve_model_tier(model)
                     if not is_tier_allowed(req_tier, key_max_tier):
@@ -996,6 +1006,16 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                         }, status=403)
 
             res = client.test_inference(prompt=prompt, model=model, max_tokens=max_tokens, temperature=temperature)
+            self.vault.record_inference_event(
+                agent=inferred_agent,
+                model=model,
+                tokens=int((res.get("usage") or {}).get("total_tokens", 0) or 0),
+                cost_usd=float((res.get("cost") or {}).get("usd", 0.0) or 0.0),
+                latency_ms=int(res.get("latency_ms", 0) or 0),
+                success=bool(res.get("success")),
+                source="web",
+                key_id=str(key_id or ""),
+            )
             return self._send_json(res)
 
         if path == "/api/agent_bots/register":
@@ -1099,6 +1119,42 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             if not resolved:
                 raise HTTPError("Unknown backup. Pick one from /api/vault/backups.", status=404)
             return self._send_json(self.vault.restore_from_file(resolved))
+
+        if path == "/api/reports/settings":
+            enabled = body.get("enabled")
+            interval_raw = body.get("interval_hours")
+            interval_val = _to_float(interval_raw, 6.0, "interval_hours") if interval_raw not in (None, "") else None
+            updated = self.vault.set_report_settings(
+                enabled=bool(enabled) if enabled is not None else None,
+                interval_hours=interval_val
+            )
+            return self._send_json({"success": True, "schedule": updated})
+
+        if path == "/api/reports/send":
+            from telegram.bot import VeniceTelegramBot
+            reporter = AgentInferenceReporter(vault=self.vault, client=client if self.vault.get_venice_admin_key() else None)
+            report = reporter.generate_report()
+            bot = VeniceTelegramBot(vault=self.vault)
+            if not bot.authorized_chat_id or not bot.token:
+                return self._send_json({
+                    "success": False,
+                    "error": "Authorized Telegram chat_id or master bot token not configured."
+                }, status=400)
+            txt = reporter.format_telegram_markdown(report, scheduled=False)
+            tg_res = bot.send_message(bot.authorized_chat_id, txt, reply_markup=bot.report_keyboard())
+            ok = bool(tg_res.get("ok"))
+            if ok:
+                acc = report.get("account", {})
+                self.vault.record_report_dispatch(
+                    usd_balance=float(acc.get("usd", 0.0) or 0.0),
+                    diem_balance=float(acc.get("diem", 0.0) or 0.0),
+                    summary=report.get("summary", {})
+                )
+            return self._send_json({
+                "success": ok,
+                "error": None if ok else (tg_res.get("error") or tg_res.get("description") or "Telegram send failed"),
+                "report": redact(report),
+            }, status=200 if ok else 502)
 
         if path == "/api/service/restart":
             return self._send_json(self._supervisor().request_restart())

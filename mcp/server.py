@@ -20,6 +20,7 @@ from core.tg_manager import TelegramAgentManager
 from core.deployer import ConfigDeployer
 from core.mesh import FleetMeshManager
 from core.guard import KeyCreationGuard
+from core.reporter import AgentInferenceReporter
 
 logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("venice_mcp")
@@ -507,6 +508,36 @@ class VeniceMCPServer:
                         }
                     }
                 }
+            },
+            {
+                "name": "venice_agent_usage_report",
+                "description": "Generates a comprehensive per-agent Venice inference usage, balance delta, allocation, anti-abuse quota, and keep-alive uptime report, with optional delivery to Telegram.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "send_telegram": {
+                            "type": "boolean",
+                            "description": "If true, dispatches the formatted report to the authorized Telegram chat (default: false)."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "venice_configure_report_schedule",
+                "description": "Configures the recurring automatic agent inference report schedule (interval in hours and enabled flag).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "Enable or pause scheduled automatic Telegram reports."
+                        },
+                        "interval_hours": {
+                            "type": "number",
+                            "description": "Cadence in hours between scheduled reports (e.g. 1, 6, 12, 24)."
+                        }
+                    }
+                }
             }
         ]
 
@@ -639,6 +670,15 @@ class VeniceMCPServer:
                     "recharge_url": "https://venice.ai/settings/api"
                 }
             res = client.test_inference(prompt=prompt, model=model, max_tokens=max_t)
+            self.vault.record_inference_event(
+                agent=str(args.get("agent") or "mcp-agent"),
+                model=model,
+                tokens=int((res.get("usage") or {}).get("total_tokens", 0) or 0),
+                cost_usd=float((res.get("cost") or {}).get("usd", 0.0) or 0.0),
+                latency_ms=int(res.get("latency_ms", 0) or 0),
+                success=bool(res.get("success")),
+                source="mcp",
+            )
             if res.get("success") and bal_status.get("is_low"):
                 res["warning"] = bal_status.get("warning")
             return res
@@ -863,6 +903,41 @@ class VeniceMCPServer:
                 "success": True,
                 "total": len(allocs),
                 "allocations": allocs
+            }
+
+        elif name == "venice_agent_usage_report":
+            send_tg = bool(args.get("send_telegram", False))
+            reporter = AgentInferenceReporter(vault=self.vault)
+            report = reporter.generate_report()
+            if send_tg:
+                from telegram.bot import VeniceTelegramBot
+                bot = VeniceTelegramBot(vault=self.vault)
+                if bot.authorized_chat_id and bot.token:
+                    txt = reporter.format_telegram_markdown(report, scheduled=False)
+                    tg_res = bot.send_message(bot.authorized_chat_id, txt, reply_markup=bot.report_keyboard())
+                    report["telegram_sent"] = bool(tg_res.get("ok"))
+                    if tg_res.get("ok"):
+                        acc = report.get("account", {})
+                        self.vault.record_report_dispatch(
+                            usd_balance=float(acc.get("usd", 0.0) or 0.0),
+                            diem_balance=float(acc.get("diem", 0.0) or 0.0),
+                            summary=report.get("summary", {})
+                        )
+                else:
+                    report["telegram_sent"] = False
+                    report["telegram_error"] = "Authorized Telegram chat_id or master bot token not configured."
+            return report
+
+        elif name == "venice_configure_report_schedule":
+            enabled = args.get("enabled")
+            interval_hours = args.get("interval_hours")
+            updated = self.vault.set_report_settings(
+                enabled=bool(enabled) if enabled is not None else None,
+                interval_hours=float(interval_hours) if interval_hours is not None else None
+            )
+            return {
+                "success": True,
+                "schedule": updated
             }
 
         return {"error": f"Unknown tool: {name}"}

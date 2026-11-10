@@ -111,7 +111,8 @@ export async function render(root, ctx) {
     out.push(card({
       title: 'Quick actions',
       body: h('div', { class: 'btn-group' },
-        h('a', { class: 'btn btn-primary', href: '#/allocations' }, 'Mint agent allocation'),
+        h('a', { class: 'btn btn-primary', href: '#/reports' }, 'Agent inference report'),
+        h('a', { class: 'btn', href: '#/allocations' }, 'Mint agent allocation'),
         h('a', { class: 'btn', href: '#/keys' }, 'Import / create key'),
         h('a', { class: 'btn', href: '#/playground' }, 'Test inference'),
         h('a', { class: 'btn', href: '#/tools' }, 'Run an MCP tool')),

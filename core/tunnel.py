@@ -107,7 +107,8 @@ class CloudflareTunnelManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1
+                bufsize=1,
+                creationflags=(0x08000000 if os.name == "nt" else 0)
             )
             self._is_running = True
             self._status_details = {

@@ -44,6 +44,7 @@ export function mount(el, ...children) {
 // ---------- Icons (inline SVG built via DOM) ----------
 const ICONS = {
   overview: 'M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 3v6h8V3z',
+  reports: 'M3 3v18h18M7 16l4-5 4 3 5-7',
   keys: 'M15 7a4 4 0 1 1-3.87 5H9v2H7v2H4v-3l5.13-5.13A4 4 0 0 1 15 7z',
   allocations: 'M20 12V8H6a2 2 0 0 1 0-4h12v4M4 6v12a2 2 0 0 0 2 2h14v-4M18 12a2 2 0 0 0 0 4h4v-4z',
   playground: 'M4 17l6-6-6-6M12 19h8',

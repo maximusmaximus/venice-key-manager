@@ -221,26 +221,30 @@ class FleetMeshManager:
 
     def sync_local_code(self) -> Dict[str, Any]:
         """Pull latest code from GitHub and report commit status."""
+        no_win = 0x08000000 if os.name == "nt" else 0
         try:
             # 1. Get current commit hash before pull
             before_hash = subprocess.check_output(
                 ["git", "rev-parse", "--short", "HEAD"],
                 cwd=str(PROJECT_ROOT),
-                stderr=subprocess.STDOUT
+                stderr=subprocess.STDOUT,
+                creationflags=no_win
             ).decode().strip()
 
             # 2. Run git pull origin main
             pull_output = subprocess.check_output(
                 ["git", "pull", "origin", "main"],
                 cwd=str(PROJECT_ROOT),
-                stderr=subprocess.STDOUT
+                stderr=subprocess.STDOUT,
+                creationflags=no_win
             ).decode().strip()
 
             # 3. Get current commit hash after pull
             after_hash = subprocess.check_output(
                 ["git", "rev-parse", "--short", "HEAD"],
                 cwd=str(PROJECT_ROOT),
-                stderr=subprocess.STDOUT
+                stderr=subprocess.STDOUT,
+                creationflags=no_win
             ).decode().strip()
 
             updated = before_hash != after_hash or "Already up to date" not in pull_output

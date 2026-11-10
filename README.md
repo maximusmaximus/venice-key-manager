@@ -65,6 +65,7 @@ service exposes — the same operations available over Telegram and MCP.
 | Route | What it does |
 |---|---|
 | `#/overview` | Balance health (OK / LOW / OUT), service + bot + tunnel status, allocation counts |
+| `#/reports` | Per-agent inference telemetry, 7-day key spend, USD delta tracking, guard quotas, keep-alive uptime, and scheduled Telegram auto-reports |
 | `#/keys` | Venice keys, validation, deploy to agent configs, delegated sub-keys ($0.25 default cap) |
 | `#/allocations` | Mint allocations, copy the `https://venice.vmu.cash/claim/<token>` link, agent instructions + MCP snippet, inspect / revoke / delete |
 | `#/playground` | Light inference against any model tier (`xs`–`xl`) |
@@ -83,9 +84,17 @@ service exposes — the same operations available over Telegram and MCP.
   `no-referrer`, 1 MB JSON body limit, path-traversal-safe static serving, secrets redacted from every
   list response (`*_preview` + `has_*` fields only).
 * The classic dashboard is still available at **`/legacy/`**.
-* New endpoints: `GET /api/health`, `/api/overview`, `/api/balance`, `/api/pairing/code`, `/api/mcp/tools`;
-  `POST /api/balance/thresholds`, `/api/pairing/rotate`, `/api/subkeys/remove`, `/api/agent_bots/remove`,
+* New endpoints: `GET /api/health`, `/api/overview`, `/api/balance`, `/api/reports/agent_usage`, `/api/pairing/code`, `/api/mcp/tools`;
+  `POST /api/reports/settings`, `/api/reports/send`, `/api/balance/thresholds`, `/api/pairing/rotate`, `/api/subkeys/remove`, `/api/agent_bots/remove`,
   `/api/mcp/call` (`{name, arguments}`) and `/api/mcp/rpc` (raw MCP JSON-RPC over HTTP).
+
+### 📈 Agent Inference Reporting & 24/7 Keep-Alive
+* **Scheduled Telegram Auto-Reports**: The bot daemon (`@v3n15PE_bot`) automatically delivers recurring agent inference & service health reports (default every `6h`, configurable via `/report_schedule <hours|on|off>` or `#/reports` in the Web UI), tracking USD/DIEM balance deltas since the previous report, 7-day per-key spend, 24h local inference requests/tokens, allocation claims, and anti-abuse guard quotas.
+* **On-Demand Triggers**:
+  - **Telegram**: `/report` (or plain text `"inference report"` / `📈 Inference Report` button)
+  - **CLI**: `python run.py report` (`--send` to push to Telegram, `--json` for structured JSON, `--interval 6`)
+  - **MCP**: `venice_agent_usage_report` and `venice_configure_report_schedule`
+* **24/7 Watchdog & Log Rotation**: `ServiceSupervisor` (`python run.py service install`) registers hidden boot auto-start + a 5-minute OS watchdog, rotates `.supervisor.log` and `.child_service.log` at 2 MB, and automatically recycles hung web processes if port `8844` stops responding.
 
 ### 🔌 Full Model Context Protocol (MCP) Server
 Exposes 20+ specialized tools and resources over stdio / JSON-RPC 2.0 for Claude Desktop, Cursor, Antigravity, and Hermes Agent.

@@ -1366,6 +1366,143 @@ class KeyVault:
         }
         self._save()
 
+    # --- Agent Inference Reporting & Telemetry ---
+
+    def get_report_settings(self) -> Dict[str, Any]:
+        """Returns regular inference report schedule settings and last snapshot state."""
+        cfg = self.data.get("report_settings", {})
+        enabled = bool(cfg.get("enabled", True))
+        try:
+            interval_hours = float(cfg.get("interval_hours", 6.0))
+        except (TypeError, ValueError):
+            interval_hours = 6.0
+        interval_hours = max(0.25, min(168.0, interval_hours))
+        last_usd = cfg.get("last_usd_balance")
+        last_diem = cfg.get("last_diem_balance")
+        return {
+            "enabled": enabled,
+            "interval_hours": round(interval_hours, 2),
+            "last_report_at": float(cfg.get("last_report_at", 0.0) or 0.0),
+            "last_report_iso": cfg.get("last_report_iso"),
+            "last_usd_balance": float(last_usd) if last_usd is not None else None,
+            "last_diem_balance": float(last_diem) if last_diem is not None else None,
+            "reports_sent_count": int(cfg.get("reports_sent_count", 0) or 0),
+        }
+
+    def set_report_settings(
+        self,
+        enabled: Optional[bool] = None,
+        interval_hours: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """Updates and persists scheduled inference report cadence."""
+        current = self.get_report_settings()
+        if enabled is not None:
+            current["enabled"] = bool(enabled)
+        if interval_hours is not None:
+            val = float(interval_hours)
+            if val <= 0:
+                current["enabled"] = False
+            else:
+                current["interval_hours"] = round(max(0.25, min(168.0, val)), 2)
+        self.data["report_settings"] = current
+        self._save(force=True, create_snapshot=False)
+        return self.get_report_settings()
+
+    def record_report_dispatch(
+        self,
+        usd_balance: float,
+        diem_balance: float = 0.0,
+        summary: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Records a dispatched inference report snapshot for delta spend tracking."""
+        now_ts = time.time()
+        now_iso = datetime.utcnow().isoformat() + "Z"
+        current = self.get_report_settings()
+        prev_usd = current.get("last_usd_balance")
+
+        current["last_report_at"] = now_ts
+        current["last_report_iso"] = now_iso
+        current["last_usd_balance"] = round(float(usd_balance), 4)
+        current["last_diem_balance"] = round(float(diem_balance), 4)
+        current["reports_sent_count"] = int(current.get("reports_sent_count", 0)) + 1
+        self.data["report_settings"] = current
+
+        snapshot = {
+            "timestamp": now_ts,
+            "iso": now_iso,
+            "usd_balance": round(float(usd_balance), 4),
+            "diem_balance": round(float(diem_balance), 4),
+            "usd_delta": round(float(usd_balance) - float(prev_usd), 4) if prev_usd is not None else 0.0,
+        }
+        if summary:
+            snapshot["active_agents"] = int(summary.get("active_agents", 0))
+            snapshot["total_keys"] = int(summary.get("total_keys", 0))
+            snapshot["spend_7d_usd"] = round(float(summary.get("spend_7d_usd", 0.0)), 4)
+            snapshot["local_calls_24h"] = int(summary.get("local_calls_24h", 0))
+
+        history = self.data.setdefault("report_history", [])
+        history.append(snapshot)
+        if len(history) > 50:
+            self.data["report_history"] = history[-50:]
+
+        self._save(force=True, create_snapshot=False)
+        return current
+
+    def get_report_history(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Returns recent dispatched report snapshots (newest first)."""
+        raw = self.data.get("report_history", [])
+        return list(reversed(raw[-max(1, int(limit)):]))
+
+    def record_inference_event(
+        self,
+        agent: str,
+        model: str = "",
+        tokens: int = 0,
+        cost_usd: float = 0.0,
+        latency_ms: int = 0,
+        success: bool = True,
+        source: str = "api",
+        key_id: str = ""
+    ) -> None:
+        """Appends a local inference telemetry event with bounded rolling retention."""
+        clean_agent = str(agent or "shared").strip()
+        if clean_agent.startswith("@"):
+            clean_agent = clean_agent[1:]
+        event = {
+            "timestamp": time.time(),
+            "iso": datetime.utcnow().isoformat() + "Z",
+            "agent": clean_agent or "shared",
+            "model": str(model or ""),
+            "tokens": int(tokens or 0),
+            "cost_usd": round(float(cost_usd or 0.0), 6),
+            "latency_ms": int(latency_ms or 0),
+            "success": bool(success),
+            "source": str(source or "api"),
+            "key_id": str(key_id or ""),
+        }
+        events = self.data.setdefault("inference_events", [])
+        events.append(event)
+        if len(events) > 300:
+            self.data["inference_events"] = events[-300:]
+        self._save(force=False, create_snapshot=False)
+
+    def get_inference_events(
+        self,
+        since_ts: float = 0.0,
+        agent: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Retrieves recorded inference events optionally filtered by timestamp and agent."""
+        raw = self.data.get("inference_events", [])
+        norm_agent = str(agent).strip().lower().lstrip("@") if agent else None
+        out = []
+        for ev in raw:
+            if since_ts and float(ev.get("timestamp", 0) or 0) < since_ts:
+                continue
+            if norm_agent and str(ev.get("agent", "")).strip().lower().lstrip("@") != norm_agent:
+                continue
+            out.append(dict(ev))
+        return out
+
 
 def _parse_iso(iso_str: Optional[str]) -> Optional[datetime]:
     if not iso_str:

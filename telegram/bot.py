@@ -32,6 +32,7 @@ from core.tiers import (
 )
 from core.supervisor import ServiceSupervisor
 from core.guard import KeyCreationGuard, GuardResult
+from core.reporter import AgentInferenceReporter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("venice_tg_bot")
@@ -42,6 +43,7 @@ class VeniceTelegramBot:
         self.vault = vault or KeyVault()
         self.bot_agent_name = "v3n15PE_bot"
         self.guard = KeyCreationGuard(self.vault)
+        self.reporter = AgentInferenceReporter(vault=self.vault)
         self.tg_manager = TelegramAgentManager(self.vault)
         self.mesh = FleetMeshManager(self.vault)
         self.token = self.vault.get_telegram_master_token()
@@ -51,8 +53,17 @@ class VeniceTelegramBot:
         self.last_update_id = 0
         self.last_balance_check_time = 0.0
         self.balance_check_interval = 600  # Check every 10 minutes
+        self.last_report_check_time = 0.0
+        self.report_check_interval = 60    # Evaluate scheduled report due every 60s
         last_alert = self.vault.get_last_balance_alert_state()
         self.last_notified_balance_status = last_alert.get("status")
+
+    def _redact_log(self, value: Any) -> str:
+        """Scrubs Telegram bot tokens from error/log messages."""
+        s = str(value or "")
+        if self.token and self.token in s:
+            s = s.replace(self.token, "<REDACTED_BOT_TOKEN>")
+        return re.sub(r"bot\d+:[A-Za-z0-9_\-]{20,}", "bot<REDACTED_TOKEN>", s)
 
     def _get_venice_client(self, caller_agent: Optional[str] = None) -> VeniceClient:
         caller = caller_agent or self.bot_agent_name
@@ -141,14 +152,50 @@ class VeniceTelegramBot:
 
         return status_info
 
+    def check_and_send_scheduled_report(self, force: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        Evaluates regular inference report schedule and dispatches an update to the
+        authorized Telegram chat whenever the configured interval elapses (or when forced).
+        """
+        self.last_report_check_time = time.time()
+        if not self.authorized_chat_id:
+            return None
+
+        sched = self.vault.get_report_settings()
+        if not force:
+            if not sched.get("enabled", True):
+                return None
+            last_at = float(sched.get("last_report_at", 0.0) or 0.0)
+            interval_sec = float(sched.get("interval_hours", 6.0)) * 3600.0
+            if last_at > 0 and (time.time() - last_at) < interval_sec:
+                return None
+
+        report = self.reporter.generate_report(caller_agent=self.bot_agent_name)
+        text = self.reporter.format_telegram_markdown(report, scheduled=not force)
+        res = self.send_message(
+            self.authorized_chat_id,
+            text,
+            reply_markup=self.report_keyboard()
+        )
+        if res.get("ok"):
+            acc = report.get("account", {})
+            self.vault.record_report_dispatch(
+                usd_balance=float(acc.get("usd", 0.0) or 0.0),
+                diem_balance=float(acc.get("diem", 0.0) or 0.0),
+                summary=report.get("summary", {})
+            )
+            logger.info("Dispatched agent inference report to authorized Telegram chat.")
+        return report
+
     def _send_request(self, method: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         url = f"{self.api_url}/{method}"
         try:
             resp = requests.post(url, json=payload, timeout=20)
             return resp.json()
         except Exception as e:
-            logger.error(f"Telegram API request {method} failed: {e}")
-            return {"ok": False, "error": str(e)}
+            safe_err = self._redact_log(e)
+            logger.error(f"Telegram API request {method} failed: {safe_err}")
+            return {"ok": False, "error": safe_err}
 
     def send_message(
         self,
@@ -203,28 +250,50 @@ class VeniceTelegramBot:
 
     # --- Menus & Keyboards ---
 
+    def report_keyboard(self) -> Dict[str, Any]:
+        sched = self.vault.get_report_settings()
+        enabled = sched.get("enabled", True)
+        toggle_label = "⏸️ Pause Auto-Report" if enabled else "▶️ Enable Auto-Report"
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "🔄 Refresh Report", "callback_data": "menu_report"},
+                    {"text": toggle_label, "callback_data": "rpt_sched_toggle"}
+                ],
+                [
+                    {"text": "⏱️ 1h", "callback_data": "rpt_sched_1"},
+                    {"text": "⏱️ 6h", "callback_data": "rpt_sched_6"},
+                    {"text": "⏱️ 12h", "callback_data": "rpt_sched_12"},
+                    {"text": "⏱️ 24h", "callback_data": "rpt_sched_24"}
+                ],
+                [
+                    {"text": "« Back to Main Dashboard", "callback_data": "menu_main"}
+                ]
+            ]
+        }
+
     def main_menu_keyboard(self) -> Dict[str, Any]:
         return {
             "inline_keyboard": [
                 [
                     {"text": "💰 Balances & Tier", "callback_data": "menu_balance"},
-                    {"text": "🔑 Venice Keys", "callback_data": "menu_keys"}
+                    {"text": "📈 Inference Report", "callback_data": "menu_report"}
                 ],
                 [
-                    {"text": "🤖 Agent TG Bots", "callback_data": "menu_tg_bots"},
+                    {"text": "🔑 Venice Keys", "callback_data": "menu_keys"},
                     {"text": "➕ Provision Key (XS-XL)", "callback_data": "wiz_key_agent"}
                 ],
                 [
-                    {"text": "⚡ Tier Inference", "callback_data": "menu_infer_tiers"},
-                    {"text": "🚀 Deploy to Config", "callback_data": "act_deploy_config"}
-                ],
-                [
-                    {"text": "🌐 Fleet Nodes (mcmini)", "callback_data": "menu_fleet"},
-                    {"text": "📥 Sync Fleet Git", "callback_data": "act_sync_fleet"}
+                    {"text": "🤖 Agent TG Bots", "callback_data": "menu_tg_bots"},
+                    {"text": "⚡ Tier Inference", "callback_data": "menu_infer_tiers"}
                 ],
                 [
                     {"text": "🎟️ Agent Sub-Keys", "callback_data": "menu_subkeys"},
                     {"text": "🌐 Claim Allocations", "callback_data": "menu_allocations"}
+                ],
+                [
+                    {"text": "🌐 Fleet Nodes (mcmini)", "callback_data": "menu_fleet"},
+                    {"text": "📥 Sync Fleet Git", "callback_data": "act_sync_fleet"}
                 ],
                 [
                     {"text": "🔒 Pairing Code", "callback_data": "menu_pair_code"},
@@ -235,7 +304,10 @@ class VeniceTelegramBot:
                     {"text": "🔄 Recall Keys", "callback_data": "act_recall_vault"}
                 ],
                 [
-                    {"text": "📊 Model Limits", "callback_data": "menu_limits"},
+                    {"text": "🚀 Deploy to Config", "callback_data": "act_deploy_config"},
+                    {"text": "📊 Model Limits", "callback_data": "menu_limits"}
+                ],
+                [
                     {"text": "🔄 Refresh Dashboard", "callback_data": "menu_main"}
                 ]
             ]
@@ -308,6 +380,34 @@ class VeniceTelegramBot:
         if data == "menu_main":
             self.answer_callback(cb_id)
             self.edit_message(chat_id, msg_id, self.render_dashboard_text(), reply_markup=self.main_menu_keyboard())
+
+        elif data == "menu_report":
+            self.answer_callback(cb_id, "Generating agent inference report...")
+            report = self.reporter.generate_report(caller_agent=self.bot_agent_name)
+            txt = self.reporter.format_telegram_markdown(report, scheduled=False)
+            self.edit_message(chat_id, msg_id, txt, reply_markup=self.report_keyboard())
+
+        elif data == "rpt_sched_toggle":
+            cur = self.vault.get_report_settings()
+            new_enabled = not cur.get("enabled", True)
+            updated = self.vault.set_report_settings(enabled=new_enabled)
+            state_label = f"Auto-reports enabled (every {updated['interval_hours']}h)" if new_enabled else "Auto-reports paused"
+            self.answer_callback(cb_id, state_label)
+            report = self.reporter.generate_report(caller_agent=self.bot_agent_name)
+            txt = self.reporter.format_telegram_markdown(report, scheduled=False)
+            self.edit_message(chat_id, msg_id, txt, reply_markup=self.report_keyboard())
+
+        elif data.startswith("rpt_sched_"):
+            hrs_raw = data[len("rpt_sched_"):]
+            try:
+                hrs = float(hrs_raw)
+                self.vault.set_report_settings(enabled=True, interval_hours=hrs)
+                self.answer_callback(cb_id, f"Auto-report cadence set to every {hrs:g}h")
+            except ValueError:
+                self.answer_callback(cb_id, "Invalid schedule interval")
+            report = self.reporter.generate_report(caller_agent=self.bot_agent_name)
+            txt = self.reporter.format_telegram_markdown(report, scheduled=False)
+            self.edit_message(chat_id, msg_id, txt, reply_markup=self.report_keyboard())
 
         elif data == "menu_balance":
             self.answer_callback(cb_id)
@@ -649,6 +749,15 @@ class VeniceTelegramBot:
             prompt = "Say hello from Venice and state your model tier in one sentence."
 
             res = client.test_inference(prompt=prompt, model=model, max_tokens=70)
+            self.vault.record_inference_event(
+                agent=self.bot_agent_name,
+                model=model,
+                tokens=int((res.get("usage") or {}).get("total_tokens", 0) or 0),
+                cost_usd=float((res.get("cost") or {}).get("usd", 0.0) or 0.0),
+                latency_ms=int(res.get("latency_ms", 0) or 0),
+                success=bool(res.get("success")),
+                source="tg_tier_sandbox",
+            )
             if res.get("success"):
                 cost = res.get("cost", {}).get("usd", 0)
                 txt = (
@@ -1454,6 +1563,61 @@ class VeniceTelegramBot:
         )
         self.send_message(chat_id, txt, reply_markup=self.back_to_main_keyboard())
 
+    def _handle_report_command(self, chat_id: str):
+        report = self.reporter.generate_report(caller_agent=self.bot_agent_name)
+        txt = self.reporter.format_telegram_markdown(report, scheduled=False)
+        res = self.send_message(chat_id, txt, reply_markup=self.report_keyboard())
+        if res.get("ok"):
+            acc = report.get("account", {})
+            self.vault.record_report_dispatch(
+                usd_balance=float(acc.get("usd", 0.0) or 0.0),
+                diem_balance=float(acc.get("diem", 0.0) or 0.0),
+                summary=report.get("summary", {})
+            )
+
+    def _handle_report_schedule_command(self, chat_id: str, text: str):
+        parts = text.split()
+        if len(parts) < 2:
+            sched = self.vault.get_report_settings()
+            status_str = "ENABLED ✅" if sched["enabled"] else "PAUSED ⏸️"
+            txt = (
+                "⏱️ *Agent Inference Auto-Report Schedule*\n\n"
+                f"• *Status*: `{status_str}`\n"
+                f"• *Interval*: `Every {sched['interval_hours']} hour(s)`\n"
+                f"• *Last Sent*: `{sched.get('last_report_iso') or 'Never'}`\n"
+                f"• *Reports Delivered*: `{sched.get('reports_sent_count', 0)}`\n\n"
+                "Usage: `/report_schedule <hours|on|off>` (e.g. `/report_schedule 6` or `/report_schedule off`)"
+            )
+            self.send_message(chat_id, txt, reply_markup=self.report_keyboard())
+            return
+
+        arg = parts[1].strip().lower().rstrip("h")
+        if arg in ("off", "disable", "pause", "false", "0"):
+            sched = self.vault.set_report_settings(enabled=False)
+            self.send_message(
+                chat_id,
+                "⏸️ *Scheduled Inference Reports Paused.*\nUse `/report_schedule on` or `/report_schedule 6` to re-enable.",
+                reply_markup=self.report_keyboard()
+            )
+        elif arg in ("on", "enable", "resume", "true"):
+            sched = self.vault.set_report_settings(enabled=True)
+            self.send_message(
+                chat_id,
+                f"▶️ *Scheduled Inference Reports Enabled!* Delivering updates every `{sched['interval_hours']}h`.",
+                reply_markup=self.report_keyboard()
+            )
+        else:
+            try:
+                hrs = float(arg)
+                sched = self.vault.set_report_settings(enabled=True, interval_hours=hrs)
+                self.send_message(
+                    chat_id,
+                    f"⏱️ *Inference Report Cadence Updated!*\nRegular agent inference reports will be sent every `{sched['interval_hours']}h`.",
+                    reply_markup=self.report_keyboard()
+                )
+            except ValueError:
+                self.send_message(chat_id, "❌ Invalid schedule value. Usage: `/report_schedule <hours|on|off>` (e.g. `/report_schedule 6`)")
+
     def _handle_help_command(self, chat_id: str):
         txt = (
             "⚡ *Venice & TG Engine Commands & Plain Text Guide*:\n\n"
@@ -1467,6 +1631,8 @@ class VeniceTelegramBot:
             "• `/deploy_key <key_id> [agent]` - Deploy key to config\n\n"
             "🛠️ *Dashboard & Fleet Commands*:\n"
             "• `/menu` or `/start` - Open interactive dashboard\n"
+            "• `/report` - Live Agent Inference & Keep-Alive Report\n"
+            "• `/report_schedule [hours|on|off]` - Configure regular updates\n"
             "• `/subkeys` - List active provisioned agent keys\n"
             "• `/allocations` - View or mint Cloud DNS claim links\n"
             "• `/balance` - Check live account balance\n"
@@ -1484,6 +1650,11 @@ class VeniceTelegramBot:
     def _handle_natural_language_message(self, chat_id: str, text: str):
         t = text.lower().strip()
         logger.info(f"Processing natural language message from {chat_id}: {text[:60]}")
+
+        # Intent 0: Agent Inference / Usage Report
+        if any(w in t for w in ["inference report", "agent report", "usage report", "spend report", "report on the agent", "report on agent", "daily report"]):
+            self._handle_report_command(chat_id)
+            return
 
         # Intent 1: Mint Allocation / Cloud DNS link
         if any(w in t for w in ["mint key", "mint a key", "mint allocation", "claim link", "allocation link"]) or (t.startswith("mint ") and "key" in t):
@@ -1566,6 +1737,15 @@ class VeniceTelegramBot:
             f"Answer concisely in friendly Markdown. If they asked about creating keys, remind them they can type 'make a key for hermes-music' or /make_key."
         )
         res = client.test_inference(prompt=ai_prompt, model="deepseek-v4-flash", max_tokens=300)
+        self.vault.record_inference_event(
+            agent=self.bot_agent_name,
+            model="deepseek-v4-flash",
+            tokens=int((res.get("usage") or {}).get("total_tokens", 0) or 0),
+            cost_usd=float((res.get("cost") or {}).get("usd", 0.0) or 0.0),
+            latency_ms=int(res.get("latency_ms", 0) or 0),
+            success=bool(res.get("success")),
+            source="tg_chat",
+        )
         reply = res.get("content") or res.get("reply") or res.get("reasoning")
         if res.get("success") and reply:
             if bal_status.get("is_low"):
@@ -1758,6 +1938,15 @@ class VeniceTelegramBot:
                 return
 
             res = client.test_inference(prompt=prompt, model="deepseek-v4-flash", max_tokens=300)
+            self.vault.record_inference_event(
+                agent=self.bot_agent_name,
+                model="deepseek-v4-flash",
+                tokens=int((res.get("usage") or {}).get("total_tokens", 0) or 0),
+                cost_usd=float((res.get("cost") or {}).get("usd", 0.0) or 0.0),
+                latency_ms=int(res.get("latency_ms", 0) or 0),
+                success=bool(res.get("success")),
+                source="tg_ask",
+            )
             if res.get("success"):
                 cost = res.get("cost", {}).get("usd", 0)
                 content = res.get("content") or res.get("reply") or res.get("reasoning")
@@ -1804,6 +1993,15 @@ class VeniceTelegramBot:
 
                 model = get_model_for_tier(tier)
                 res = client.test_inference(prompt=prompt, model=model, max_tokens=300)
+                self.vault.record_inference_event(
+                    agent=self.bot_agent_name,
+                    model=model,
+                    tokens=int((res.get("usage") or {}).get("total_tokens", 0) or 0),
+                    cost_usd=float((res.get("cost") or {}).get("usd", 0.0) or 0.0),
+                    latency_ms=int(res.get("latency_ms", 0) or 0),
+                    success=bool(res.get("success")),
+                    source="tg_ask_tier",
+                )
                 if res.get("success"):
                     cost = res.get("cost", {}).get("usd", 0)
                     content = res.get("content") or res.get("reply") or res.get("reasoning")
@@ -1943,6 +2141,14 @@ class VeniceTelegramBot:
                 f"• *Active Venice Keys*: `{st.get('keys_count')}`\n"
                 f"• *Agent Sub-Keys*: `{st.get('subkeys_count')}`"
             )
+            self.send_message(chat_id, txt, reply_markup=self.back_to_main_keyboard())
+
+        elif cmd in ("/report", "/usage", "/agent_report", "/inference_report"):
+            self._handle_report_command(chat_id)
+
+        elif cmd in ("/report_schedule", "/schedule_report"):
+            self._handle_report_schedule_command(chat_id, text)
+
         elif cmd == "/service_status" or cmd == "/status":
             supervisor = ServiceSupervisor()
             st = supervisor.get_status()
@@ -1974,6 +2180,8 @@ class VeniceTelegramBot:
             txt = (
                 "⚡ *Venice & TG Engine Commands*:\n\n"
                 "• `/menu` or `/start` - Open interactive control dashboard\n"
+                "• `/report` - Live Agent Inference & Keep-Alive Report\n"
+                "• `/report_schedule [hours|on|off]` - Configure regular report cadence\n"
                 "• `/provision` - Open Agent Key (XS-XL) Provisioning Wizard\n"
                 "• `/allocations` - View or mint Cloud DNS claim allocations\n"
                 "• `/subkeys` - List active provisioned agent sub-keys\n"
@@ -2013,24 +2221,36 @@ class VeniceTelegramBot:
                         self.handle_callback_query(upd["callback_query"])
                     elif "message" in upd:
                         self.handle_message(upd["message"])
+            elif resp.status_code == 409:
+                logger.warning("Telegram getUpdates conflict (409); backing off 5s...")
+                time.sleep(5)
         except requests.exceptions.Timeout:
             pass
         except Exception as e:
-            logger.error(f"Polling error: {e}")
+            logger.error(f"Polling error: {self._redact_log(e)}")
             time.sleep(2)
 
     def run(self):
         self.running = True
-        logger.info(f"Venice Telegram Bot started. Listening for updates...")
+        logger.info("Venice Telegram Bot started. Listening for updates...")
         try:
             self.check_and_notify_balance()
         except Exception as e:
-            logger.error(f"Initial balance check error: {e}")
+            logger.error(f"Initial balance check error: {self._redact_log(e)}")
+
+        try:
+            self.check_and_send_scheduled_report()
+        except Exception as e:
+            logger.error(f"Initial scheduled report check error: {self._redact_log(e)}")
 
         while self.running:
             try:
-                if time.time() - self.last_balance_check_time > self.balance_check_interval:
+                now_t = time.time()
+                if now_t - self.last_balance_check_time > self.balance_check_interval:
                     self.check_and_notify_balance()
+
+                if now_t - self.last_report_check_time > self.report_check_interval:
+                    self.check_and_send_scheduled_report()
 
                 self.poll_once()
             except KeyboardInterrupt:
@@ -2038,7 +2258,7 @@ class VeniceTelegramBot:
                 self.running = False
                 break
             except Exception as e:
-                logger.error(f"Unexpected bot loop error: {e}")
+                logger.error(f"Unexpected bot loop error: {self._redact_log(e)}")
                 time.sleep(2)
 
 

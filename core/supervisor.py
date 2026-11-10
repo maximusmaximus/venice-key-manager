@@ -32,6 +32,9 @@ WINDOWS_TASK_NAME = "VeniceKeyManagerSupervisor"
 WINDOWS_WATCHDOG_TASK_NAME = "VeniceKeyManagerWatchdog"
 
 
+NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+
 def is_port_open(port: int, host: str = "127.0.0.1", timeout: float = 1.0) -> bool:
     """Check if a TCP port is open and listening locally."""
     try:
@@ -48,12 +51,20 @@ def is_process_running(pid: int) -> bool:
         return False
     if os.name == "nt":
         try:
-            # Query tasklist on Windows
-            cmd = f'tasklist /FI "PID eq {pid}" /NH'
-            out = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
-            return str(pid) in out
-        except Exception:
+            import ctypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            h = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if h:
+                ctypes.windll.kernel32.CloseHandle(h)
+                return True
             return False
+        except Exception:
+            try:
+                cmd = f'tasklist /FI "PID eq {pid}" /NH'
+                out = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
+                return str(pid) in out
+            except Exception:
+                return False
     else:
         try:
             os.kill(pid, 0)
@@ -64,6 +75,8 @@ def is_process_running(pid: int) -> bool:
 
 class ServiceSupervisor:
     """Manages the lifecycle, auto-restart watchdog, and boot registration of Venice Key Manager."""
+
+    MAX_LOG_BYTES = 2 * 1024 * 1024  # Rotate supervisor/child logs at 2 MB
 
     def __init__(self, root_dir: Optional[Path] = None, port: int = 8844):
         self.root_dir = root_dir or PROJECT_ROOT
@@ -77,6 +90,24 @@ class ServiceSupervisor:
         self.sentinel_restart = state_dir / ".restart_requested"
         self.log_file = state_dir / ".supervisor.log"
         self._stop_requested = False
+
+    @classmethod
+    def _rotate_log_if_needed(cls, log_path: Path, max_bytes: Optional[int] = None) -> bool:
+        """Rotates a log file to `<name>.1` when it exceeds `max_bytes`."""
+        limit = max_bytes if max_bytes is not None else cls.MAX_LOG_BYTES
+        try:
+            if log_path.exists() and log_path.stat().st_size >= limit:
+                rotated = Path(str(log_path) + ".1")
+                try:
+                    os.replace(str(log_path), str(rotated))
+                except OSError:
+                    # If file handle is open elsewhere on Windows, truncate best-effort
+                    with open(log_path, "w", encoding="utf-8") as f:
+                        f.write("")
+                return True
+        except Exception:
+            pass
+        return False
 
     def log(self, message: str):
         """Log message with timestamp to stdout and supervisor log file."""
@@ -95,6 +126,7 @@ class ServiceSupervisor:
             pass
 
         try:
+            self._rotate_log_if_needed(self.log_file)
             with open(self.log_file, "a", encoding="utf-8") as f:
                 f.write(entry + "\n")
         except Exception:
@@ -189,7 +221,8 @@ class ServiceSupervisor:
         """
         lock = self._acquire_instance_lock()
         if lock is None:
-            self.log("Another supervisor instance is already running; exiting.")
+            if os.environ.get("VENICE_SUPERVISOR_VERBOSE") == "1":
+                self.log("Another supervisor instance is already running; exiting.")
             return
         try:
             if child_args is None and is_port_open(self.port):
@@ -220,6 +253,8 @@ class ServiceSupervisor:
         if child_args is None:
             child_args = [sys.executable, "-u", str(self.root_dir / "run.py"), "--all", "--port", str(self.port)]
 
+        check_web_port = ("--all" in child_args or "--web" in child_args)
+
         state = self.load_state()
         state["status"] = "RUNNING"
         state["supervisor_pid"] = os.getpid()
@@ -245,13 +280,15 @@ class ServiceSupervisor:
             child_log_file = None
             try:
                 child_log_path = self.root_dir / ".child_service.log"
+                self._rotate_log_if_needed(child_log_path)
                 child_log_file = open(child_log_path, "a", encoding="utf-8", errors="replace", buffering=1)
                 proc = subprocess.Popen(
                     child_args,
                     cwd=str(self.root_dir),
                     stdin=subprocess.DEVNULL,
                     stdout=child_log_file,
-                    stderr=subprocess.STDOUT
+                    stderr=subprocess.STDOUT,
+                    creationflags=NO_WINDOW
                 )
             except Exception as e:
                 self.log(f"❌ Failed to spawn child process: {e}")
@@ -267,6 +304,9 @@ class ServiceSupervisor:
             state["status"] = "RUNNING"
             self.save_state(state)
             self.log(f"Child process running (PID: {proc.pid})")
+
+            last_port_probe = spawn_time
+            consecutive_port_failures = 0
 
             # Monitoring loop for this child
             while True:
@@ -312,6 +352,37 @@ class ServiceSupervisor:
                         except Exception:
                             pass
                     break  # Break inner loop to spawn new child
+
+                # Active HTTP/TCP port health watchdog when supervising web/all daemon
+                now_t = time.time()
+                if check_web_port and (now_t - spawn_time) > 45.0 and (now_t - last_port_probe) >= 30.0:
+                    last_port_probe = now_t
+                    if is_port_open(self.port):
+                        consecutive_port_failures = 0
+                    else:
+                        consecutive_port_failures += 1
+                        self.log(f"⚠️ Health check warning: port {self.port} unresponsive ({consecutive_port_failures}/3).")
+                        if consecutive_port_failures >= 3:
+                            self.log(f"🚨 Port {self.port} failed 3 consecutive health checks! Recycling hung child (PID: {proc.pid})...")
+                            try:
+                                proc.terminate()
+                                proc.wait(timeout=5)
+                            except Exception:
+                                try:
+                                    proc.kill()
+                                except Exception:
+                                    pass
+                            if child_log_file:
+                                try:
+                                    child_log_file.close()
+                                except Exception:
+                                    pass
+                            restarts = state.get("restarts_count", 0) + 1
+                            state["restarts_count"] = restarts
+                            state["last_restart_at"] = datetime.utcnow().isoformat() + "Z"
+                            state["last_exit_code"] = -9
+                            self.save_state(state)
+                            break
 
                 # Check child status
                 ret = proc.poll()
@@ -369,7 +440,7 @@ class ServiceSupervisor:
                 # Send terminate or kill to expedite restart
                 try:
                     if os.name == "nt":
-                        subprocess.run(f"taskkill /PID {child_pid} /F", shell=True, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        subprocess.run(f"taskkill /PID {child_pid} /F", shell=True, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
                     else:
                         os.kill(child_pid, signal.SIGTERM)
                 except Exception:
@@ -407,12 +478,12 @@ class ServiceSupervisor:
         """Let a scheduled task start/keep running on battery and without a time limit (best effort)."""
         ps = (
             "$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries "
-            "-ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew; "
+            "-Hidden -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew; "
             f"Set-ScheduledTask -TaskName '{task_name}' -Settings $s | Out-Null"
         )
         try:
-            res = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-                                 capture_output=True, text=True, timeout=60)
+            res = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps],
+                                 capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW)
             return res.returncode == 0
         except Exception:
             return False
@@ -420,6 +491,9 @@ class ServiceSupervisor:
     def _install_windows(self, results: Dict[str, Any]) -> Dict[str, Any]:
         """Install Windows startup VBScript, logon task and a 5-minute watchdog task."""
         python_exe = sys.executable
+        pythonw_candidate = Path(python_exe).with_name("pythonw.exe")
+        if pythonw_candidate.exists():
+            python_exe = str(pythonw_candidate)
         supervisor_py = self.root_dir / "supervisor.py"
         vbs_path: Optional[Path] = None
 
@@ -458,7 +532,7 @@ class ServiceSupervisor:
         for task_name, schedule, method in tasks:
             try:
                 cmd = ["schtasks", "/Create", "/TN", task_name, "/TR", tr_command] + schedule + ["/F"]
-                res = subprocess.run(cmd, capture_output=True, text=True)
+                res = subprocess.run(cmd, capture_output=True, text=True, creationflags=NO_WINDOW)
                 if res.returncode == 0:
                     results["installed_methods"].append(method)
                     results["messages"].append(f"Registered Windows Scheduled Task '{task_name}'")
@@ -662,7 +736,7 @@ WantedBy=default.target
             for task_name, method in ((WINDOWS_TASK_NAME, "windows_task_scheduler"),
                                       (WINDOWS_WATCHDOG_TASK_NAME, "windows_watchdog_task")):
                 try:
-                    res = subprocess.run(f'schtasks /Query /TN "{task_name}"', shell=True, capture_output=True, text=True)
+                    res = subprocess.run(f'schtasks /Query /TN "{task_name}"', shell=True, capture_output=True, text=True, creationflags=NO_WINDOW)
                     if res.returncode == 0:
                         autostart_methods.append(method)
                 except Exception:

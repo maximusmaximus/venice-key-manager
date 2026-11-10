@@ -4,6 +4,7 @@ import { h, mount, icon, toast, fmtUSD, fmtNum, notice, busy, errorState, skelet
 
 const ROUTES = [
   { path: 'overview', label: 'Overview', icon: 'overview', section: 'Monitor', load: () => import('./views/overview.js') },
+  { path: 'reports', label: 'Inference reports', icon: 'reports', section: 'Monitor', load: () => import('./views/reports.js') },
   { path: 'keys', label: 'Keys & sub-keys', icon: 'keys', section: 'Keys', load: () => import('./views/keys.js') },
   { path: 'allocations', label: 'Agent allocations', icon: 'allocations', section: 'Keys', load: () => import('./views/allocations.js') },
   { path: 'playground', label: 'Inference & models', icon: 'playground', section: 'Keys', load: () => import('./views/playground.js') },
