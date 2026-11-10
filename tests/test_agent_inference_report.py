@@ -321,6 +321,49 @@ class TestAgentInferenceReporter(unittest.TestCase):
             httpd.server_close()
             DashboardRequestHandler.vault = old_vault
 
+    def test_7_telegram_401_token_auto_recovery(self):
+        """Stale master_bot_token self-heals on HTTP 401 using registered v3n15PE_bot token."""
+        stale_token = "100000099:STALE_REVOKED_UNIT_TEST_TOKEN"
+        valid_token = "100000100:VALID_AGENT_UNIT_TEST_TOKEN"
+        self.vault.set_telegram_master_token(stale_token)
+        self.vault.register_agent_bot("v3n15PE_bot", {
+            "username": "v3n15PE_bot",
+            "bot_token": valid_token,
+        })
+        bot = VeniceTelegramBot(vault=self.vault)
+        self.assertEqual(bot.token, stale_token)
+
+        post_calls = []
+
+        def fake_post(url, json=None, timeout=20):
+            post_calls.append(url)
+            resp = MagicMock()
+            if stale_token in url:
+                resp.status_code = 401
+                resp.json.return_value = {"ok": False, "error_code": 401, "description": "Unauthorized"}
+            else:
+                resp.status_code = 200
+                resp.json.return_value = {"ok": True, "result": {"message_id": 42}}
+            return resp
+
+        def fake_get(url, timeout=10):
+            resp = MagicMock()
+            if valid_token in url:
+                resp.status_code = 200
+                resp.json.return_value = {"ok": True, "result": {"username": "v3n15PE_bot"}}
+            else:
+                resp.status_code = 401
+                resp.json.return_value = {"ok": False, "error_code": 401}
+            return resp
+
+        with patch("telegram.bot.requests.post", side_effect=fake_post), \
+             patch("telegram.bot.requests.get", side_effect=fake_get):
+            res = bot.send_message(TEST_CHAT_ID, "Self-healing token test")
+            self.assertTrue(res["ok"])
+            self.assertEqual(bot.token, valid_token)
+            self.assertEqual(self.vault.get_telegram_master_token(), valid_token)
+            self.assertEqual(len(post_calls), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

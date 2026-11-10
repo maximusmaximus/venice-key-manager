@@ -46,7 +46,7 @@ class VeniceTelegramBot:
         self.reporter = AgentInferenceReporter(vault=self.vault)
         self.tg_manager = TelegramAgentManager(self.vault)
         self.mesh = FleetMeshManager(self.vault)
-        self.token = self.vault.get_telegram_master_token()
+        self.token = self._resolve_bot_token()
         self.authorized_chat_id = self.vault.get_authorized_chat_id()
         self.api_url = f"https://api.telegram.org/bot{self.token}"
         self.running = False
@@ -57,6 +57,41 @@ class VeniceTelegramBot:
         self.report_check_interval = 60    # Evaluate scheduled report due every 60s
         last_alert = self.vault.get_last_balance_alert_state()
         self.last_notified_balance_status = last_alert.get("status")
+
+    def _resolve_bot_token(self) -> str:
+        """Resolves master bot token with fallback to registered @v3n15PE_bot token."""
+        primary = self.vault.get_telegram_master_token()
+        if primary:
+            return primary
+        bot_cfg = self.vault.get_agent_bot(self.bot_agent_name) or {}
+        return str(bot_cfg.get("bot_token", "") or "")
+
+    def _recover_unauthorized_token(self) -> bool:
+        """
+        Self-heals 401 Unauthorized when master_bot_token is stale/revoked
+        but registered agent_bots[bot_agent_name] holds a live valid token.
+        """
+        candidates: List[str] = []
+        bot_cfg = self.vault.get_agent_bot(self.bot_agent_name) or {}
+        agent_tok = str(bot_cfg.get("bot_token", "") or "").strip()
+        master_tok = str(self.vault.get_telegram_master_token() or "").strip()
+        for cand in (agent_tok, master_tok):
+            if cand and cand != self.token and cand not in candidates:
+                candidates.append(cand)
+
+        for cand in candidates:
+            try:
+                r = requests.get(f"https://api.telegram.org/bot{cand}/getMe", timeout=10)
+                if r.status_code == 200 and r.json().get("ok"):
+                    self.token = cand
+                    self.api_url = f"https://api.telegram.org/bot{self.token}"
+                    self.vault.set_telegram_master_token(cand)
+                    uname = r.json().get("result", {}).get("username", self.bot_agent_name)
+                    logger.info(f"Recovered unauthorized Telegram token using @{uname} credentials.")
+                    return True
+            except Exception:
+                continue
+        return False
 
     def _redact_log(self, value: Any) -> str:
         """Scrubs Telegram bot tokens from error/log messages."""
@@ -187,11 +222,15 @@ class VeniceTelegramBot:
             logger.info("Dispatched agent inference report to authorized Telegram chat.")
         return report
 
-    def _send_request(self, method: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _send_request(self, method: str, payload: Dict[str, Any], _retried: bool = False) -> Dict[str, Any]:
         url = f"{self.api_url}/{method}"
         try:
             resp = requests.post(url, json=payload, timeout=20)
-            return resp.json()
+            data = resp.json()
+            if (resp.status_code == 401 or data.get("error_code") == 401) and not _retried:
+                if self._recover_unauthorized_token():
+                    return self._send_request(method, payload, _retried=True)
+            return data
         except Exception as e:
             safe_err = self._redact_log(e)
             logger.error(f"Telegram API request {method} failed: {safe_err}")
@@ -2221,6 +2260,10 @@ class VeniceTelegramBot:
                         self.handle_callback_query(upd["callback_query"])
                     elif "message" in upd:
                         self.handle_message(upd["message"])
+            elif resp.status_code == 401:
+                if not self._recover_unauthorized_token():
+                    logger.error("Telegram getUpdates returned 401 Unauthorized; backing off 15s...")
+                    time.sleep(15)
             elif resp.status_code == 409:
                 logger.warning("Telegram getUpdates conflict (409); backing off 5s...")
                 time.sleep(5)
