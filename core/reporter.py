@@ -531,7 +531,7 @@ class AgentInferenceReporter:
         if agents:
             for ag in agents[:8]:
                 name = ag.get("agent", "agent")
-                bot_u = f" ({ag['bot_username']})" if ag.get("bot_username") else ""
+                bot_u = f" (`{ag['bot_username']}`)" if ag.get("bot_username") else ""
                 tiers = ",".join(ag.get("tiers") or []) or "—"
                 k_cnt = ag.get("active_keys_count", 0)
                 sk_cnt = ag.get("subkeys_count", 0)
@@ -541,7 +541,7 @@ class AgentInferenceReporter:
                 clm = ag.get("allocations_claimed", 0)
                 tot_al = ag.get("allocations_total", 0)
 
-                lines.append(f"• *{name}*{bot_u} `[Tiers: {tiers}]`")
+                lines.append(f"• `{name}`{bot_u} `[Tiers: {tiers}]`")
                 detail = f"  Keys: `{k_cnt}`"
                 if sk_cnt:
                     detail += f" (+`{sk_cnt}` sub)"
@@ -565,8 +565,9 @@ class AgentInferenceReporter:
             lines.append("🔑 *Top Consuming Keys (7d)*")
             for tk in active_top[:5]:
                 lim_str = f" / ${tk['limit_usd']:.2f}" if tk.get("limit_usd") else ""
+                safe_kname = str(tk.get("name", "")).replace("_", "-").replace("*", "").replace("`", "")
                 lines.append(
-                    f"• `{tk['masked']}` *{tk['name']}* (`{tk['agent']}`): `${tk['spend_7d_usd']:.4f}`{lim_str}"
+                    f"• `{tk['masked']}` *{safe_kname}* (`{tk['agent']}`): `${tk['spend_7d_usd']:.4f}`{lim_str}"
                 )
 
         if svc:
